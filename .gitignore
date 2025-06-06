@@ -21,6 +21,7 @@ DartConfiguration.tcl
 *.log
 .env
 .clangd
+.DS_Store
 
 # Python
 __pycache__
