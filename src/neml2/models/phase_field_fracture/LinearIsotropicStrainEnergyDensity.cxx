@@ -23,8 +23,12 @@
 // THE SOFTWARE.
 
 #include "neml2/models/phase_field_fracture/LinearIsotropicStrainEnergyDensity.h"
+#include "neml2/misc/types.h"
+#include "neml2/tensors/SR2.h"
 #include "neml2/tensors/SSR4.h"
 #include "neml2/tensors/Scalar.h"
+#include "neml2/user_tensors/ZerosTensor.h"
+#include "neml2/tensors/functions/macaulay.h"
 
 namespace neml2
 {
@@ -59,19 +63,70 @@ LinearIsotropicStrainEnergyDensity::set_value(bool out, bool dout_din, bool d2ou
 
   const auto s = vf * SR2(_strain).vol() + df * SR2(_strain).dev();
 
-  if (out)
-    _psie = 0.5 * SR2(s).inner(_strain);
-
-  if (dout_din)
+  if (_decomposition == 0)
   {
-    _psie.d(_strain) = s;
+    if (out)
+    {
+      _psie_active = 0.5 * SR2(s).inner(_strain);
+      _psie_inactive = Scalar::create(0.0, _strain.options());
+    }
+    if (dout_din)
+    {
+      _psie_active.d(_strain) = s;
+      _psie_inactive.d(_strain) = SR2::fill(0.0, s.options());
+    }
+    if (d2out_din2)
+    {
+      const auto I = SSR4::identity_vol(_strain.options());
+      const auto J = SSR4::identity_dev(_strain.options());
+
+      _psie_active.d(_strain, _strain) = vf * I + df * J;
+      _psie_inactive.d(_strain, _strain) = 0.0 * I + 0.0 * J;
+    }
   }
-  if (d2out_din2)
-  {
-    const auto I = SSR4::identity_vol(_strain.options());
-    const auto J = SSR4::identity_dev(_strain.options());
 
-    _psie.d(_strain, _strain) = vf * I + df * J;
+  // auto lambda = K - (2/3) * G;
+  const auto I2 = SR2::identity(_strain.options());
+  auto strain_trace = SR2(_strain).tr();
+  auto strain_trace_pos = macaulay(strain_trace);
+  auto strain_trace_neg = strain_trace - strain_trace_pos;
+  auto strain_dev = SR2(_strain).dev();
+
+  if (_decomposition == 2)
+  {
+    if (out)
+    {
+      auto psie_intact =
+          0.5 * K * strain_trace * strain_trace + G * SR2(strain_dev).inner(strain_dev);
+      _psie_inactive = 0.5 * K * strain_trace_neg * strain_trace_neg;
+      _psie_active = psie_intact - _psie_inactive;
+    }
+    if (dout_din)
+    {
+      auto s_intact = K * strain_trace * I2 + 2 * G * strain_dev;
+      _psie_inactive.d(_strain) = K * strain_trace_neg * I2;
+      _psie_active.d(_strain) = s_intact - K * strain_trace_neg * I2;
+    }
+    if (d2out_din2)
+    {
+      const auto I = SSR4::identity_vol(_strain.options());
+      const auto J = SSR4::identity_dev(_strain.options());
+      auto elasticity_tensor = vf * I + df * J;
+      auto dstressneg_dstrain = 0.0 * I + 0.0 * J;
+
+      if (strain_trace_neg.equal(Scalar::create(
+              0.0, strain_trace_neg.options()))) ///strain_trace_neg.item().toDouble() != 0.0
+      {
+        _psie_inactive.d(_strain, _strain) = dstressneg_dstrain;
+      }
+      else
+      {
+        dstressneg_dstrain = dstressneg_dstrain + vf * I;
+        _psie_inactive.d(_strain, _strain) = dstressneg_dstrain;
+      }
+
+      _psie_active.d(_strain, _strain) = elasticity_tensor - dstressneg_dstrain;
+    }
   }
 }
 } // namespace neml2

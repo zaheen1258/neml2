@@ -1,3 +1,6 @@
+[Settings]
+  additional_libraries = '/Users/knasir/projects/neml2_local/neml2/build/dev/src/neml2/libneml2_user_tensor_Debug.dylib'
+[]
 
 [Drivers]
   [unit]
@@ -5,11 +8,13 @@
     model = 'energy'
     input_SR2_names = 'state/internal/Ee'
     input_SR2_values = 'Ee'
-    output_Scalar_names = 'state/psie'
-    output_Scalar_values = '2443.2'  
+    output_Scalar_names = 'state/psie_active state/psie_inactive'
+    output_Scalar_values = '2443.2 0.0'  
     derivative_abs_tol = 0
     derivative_rel_tol = 1e-3
     check_second_derivatives = true
+    show_input_axis = true
+    show_output_axis = true
   []
 []
 
@@ -24,8 +29,10 @@
   [energy]
     type = LinearIsotropicStrainEnergyDensity
     strain = 'state/internal/Ee'
-    strain_energy_density = 'state/psie'
+    strain_energy_density_active = 'state/psie_active'
+    strain_energy_density_inactive = 'state/psie_inactive'
     coefficient_types = 'BULK_MODULUS SHEAR_MODULUS'
     coefficients = '1.4e5 7.8e4'
+    decomposition = 'NONE'
   []
 []
