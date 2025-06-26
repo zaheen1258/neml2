@@ -29,6 +29,7 @@
 #include "neml2/tensors/Scalar.h"
 #include "neml2/user_tensors/ZerosTensor.h"
 #include "neml2/tensors/functions/macaulay.h"
+#include "neml2/tensors/functions/where.h"
 
 namespace neml2
 {
@@ -85,7 +86,6 @@ LinearIsotropicStrainEnergyDensity::set_value(bool out, bool dout_din, bool d2ou
     }
   }
 
-  // auto lambda = K - (2/3) * G;
   const auto I2 = SR2::identity(_strain.options());
   auto strain_trace = SR2(_strain).tr();
   auto strain_trace_pos = macaulay(strain_trace);
@@ -94,6 +94,7 @@ LinearIsotropicStrainEnergyDensity::set_value(bool out, bool dout_din, bool d2ou
 
   if (_decomposition == 2)
   {
+    std::cout << "strain values " << _strain.value() << std::endl;
     if (out)
     {
       auto psie_intact =
@@ -111,20 +112,14 @@ LinearIsotropicStrainEnergyDensity::set_value(bool out, bool dout_din, bool d2ou
     {
       const auto I = SSR4::identity_vol(_strain.options());
       const auto J = SSR4::identity_dev(_strain.options());
-      auto elasticity_tensor = vf * I + df * J;
-      auto dstressneg_dstrain = 0.0 * I + 0.0 * J;
-
-      if (strain_trace_neg.equal(Scalar::create(
-              0.0, strain_trace_neg.options()))) ///strain_trace_neg.item().toDouble() != 0.0
-      {
-        _psie_inactive.d(_strain, _strain) = dstressneg_dstrain;
-      }
-      else
-      {
-        dstressneg_dstrain = dstressneg_dstrain + vf * I;
-        _psie_inactive.d(_strain, _strain) = dstressneg_dstrain;
-      }
-
+      const auto elasticity_tensor = vf * I + df * J;
+      
+      auto multiplier = where(strain_trace_neg < 0, 
+                            Scalar::ones_like(strain_trace_neg), 
+                            Scalar::zeros_like(strain_trace_neg));
+      
+      auto dstressneg_dstrain = multiplier * (vf * I);
+      _psie_inactive.d(_strain, _strain) = dstressneg_dstrain;
       _psie_active.d(_strain, _strain) = elasticity_tensor - dstressneg_dstrain;
     }
   }
