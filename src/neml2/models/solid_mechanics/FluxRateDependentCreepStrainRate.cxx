@@ -38,12 +38,13 @@ FluxRateDependentCreepStrainRate::expected_options()
 {
   OptionSet options = Model::expected_options();
   options.doc() =
-      " This object calculates the rate of creep strain depending on the principal stresses and "
-      "neutron flux rate following associative flow rule, i.e. "
-      "\\f$ \\dot{\\boldsymbol{\\varepsilon}}_{phi} = \\begin{bmatrix} \\dot{\\varepsilon}_1 & 0 & "
-      "0 \\ 0 & \\dot{\\varepsilon}_2 & 0 \\ 0 & 0 & \\dot{\\varepsilon}_3 \\end{bmatrix} "
-      "\\dot{\\phi} \\f$, where \\f$ \\dot{\\varepsilon}_i = \\alpha \\left(\\sigma_i - \\beta "
-      "\\left(\\sigma_j + \\sigma_k \\right) \\right) \\f ";
+    " This object calculates the rate of creep strain depending on the principal stresses and "
+    "neutron flux rate following associative flow rule, i.e. "
+    "\\f$ \\dot{\\boldsymbol{\\varepsilon}}_{\\phi} = \\begin{bmatrix} \\dot{\\varepsilon}_1 & 0 & 0 \\\\ "
+    "0 & \\dot{\\varepsilon}_2 & 0 \\\\ "
+    "0 & 0 & \\dot{\\varepsilon}_3 \\end{bmatrix} \\dot{\\phi} \\f$, "
+    "where \\f$ \\dot{\\varepsilon}_i = \\alpha \\left(\\sigma_i - \\beta "
+    "\\left(\\sigma_j + \\sigma_k \\right) \\right) \\f$.";
 
   options.set_input("stress") = VariableName(STATE, "internal", "S");
   options.set("stress").doc() = "Stress tensor calculated using any stress calculator";

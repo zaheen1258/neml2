@@ -50,7 +50,7 @@ TEST_CASE("eigh", "[linalg]")
                       0.13657139241695);
     auto [eigvals, eigvecs] = linalg::eigh(s);
     REQUIRE(at::allclose(eigvals, b));
-    for (Size i = 0; i < 3; i ++)
+    for (Size i = 0; i < 3; i++)
     {
       auto v1 = eigvecs.base_index({Slice(), i});
       auto v2 = v.base_index({Slice(), i});
