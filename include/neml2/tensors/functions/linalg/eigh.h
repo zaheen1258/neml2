@@ -34,7 +34,7 @@ class Tensor;
 
 namespace linalg
 {
-/// Eigenvalues of a 
+/// Eigenvalues of a
 std::tuple<Vec, R2> eigh(const SR2 & m);
 } // namespace linalg
 } // namespace neml2
