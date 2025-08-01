@@ -22,57 +22,37 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-#include "neml2/tensors/Vec.h"
-#include "neml2/tensors/Scalar.h"
-#include "neml2/tensors/R2.h"
-#include "neml2/tensors/SR2.h"
-#include "neml2/tensors/Rot.h"
+#pragma once
 
-#include "neml2/tensors/functions/linalg/vecdot.h"
-#include "neml2/tensors/functions/linalg/cross.h"
-#include "neml2/tensors/functions/linalg/outer.h"
+#include "neml2/models/Model.h"
 
 namespace neml2
 {
-Vec::Vec(const Rot & r)
-  : Vec(Tensor(r))
-{
-}
+class SR2;
 
-R2
-Vec::identity_map(const TensorOptions & options)
+class FluxRateDependentCreepStrainRate : public Model
 {
-  return R2::identity(options);
-}
+public:
+  static OptionSet expected_options();
 
-Scalar
-Vec::dot(const Vec & v) const
-{
-  return linalg::vecdot(*this, v);
-}
+  FluxRateDependentCreepStrainRate(const OptionSet & options);
 
-Vec
-Vec::cross(const Vec & v) const
-{
-  return linalg::cross(*this, v);
-}
+protected:
+  void set_value(bool out, bool dout_din, bool d2out_din2) override;
 
-R2
-Vec::outer(const Vec & v) const
-{
-  return linalg::outer(*this, v);
-}
+  /// Stress tensor
+  const Variable<SR2> & _stress;
 
-SR2
-Vec::self_outer() const
-{
-  return SR2(this->outer(*this));
-}
+  /// scalar neutron flux rate
+  const Variable<Scalar> & _phi_dot;
 
-Vec
-Vec::transform(const R2 & op) const
-{
-  return op * (*this);
-}
+  /// Young's modulus
+  const Scalar & _alpha;
 
+  /// Poission's ratio
+  const Scalar & _beta;
+
+  /// Flux rate dependent eigenstrain rate
+  Variable<SR2> & _Ephi_dot;
+};
 } // namespace neml2
