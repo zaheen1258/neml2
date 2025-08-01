@@ -27,7 +27,6 @@
 #include "neml2/tensors/R2.h"
 #include "neml2/tensors/SR2.h"
 
-
 namespace neml2::linalg
 {
 SR2
