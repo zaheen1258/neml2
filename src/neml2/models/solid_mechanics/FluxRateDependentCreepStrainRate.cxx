@@ -40,10 +40,10 @@ FluxRateDependentCreepStrainRate::expected_options()
   options.doc() =
       " This object calculates the rate of creep strain depending on the principal stresses and "
       "neutron flux rate following associative flow rule, i.e. "
-      "\\f$ \\dot{\\boldsymbol{\\varepsilon}}_{\\phi} = \\begin{bmatrix} \\dot{\\varepsilon}_1 & 0 "
+      "\\f$ \\dot{\\boldsymbol{\\varepsilon}}_{\\phi} = \\left[ \\dot{\\varepsilon}_1 & 0 "
       "& 0 \\\\ "
       "0 & \\dot{\\varepsilon}_2 & 0 \\\\ "
-      "0 & 0 & \\dot{\\varepsilon}_3 \\end{bmatrix} \\dot{\\phi} \\f$, "
+      "0 & 0 & \\dot{\\varepsilon}_3 \\right] \\dot{\\phi} \\f$, "
       "where \\f$ \\dot{\\varepsilon}_i = \\alpha \\left(\\sigma_i - \\beta "
       "\\left(\\sigma_j + \\sigma_k \\right) \\right) \\f$.";
 
