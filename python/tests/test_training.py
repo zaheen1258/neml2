@@ -29,27 +29,38 @@ import neml2
 
 
 def test_parameter_gradient():
+    """
+    Test that we can compute parameter gradients through a model.
+    This test case is setup mimicking pyzag workflow.
+    """
     pwd = Path(__file__).parent
     model = neml2.load_model(pwd / "test_training.i", "model")
-    xassembler = neml2.VectorAssembler(model.input_axis(setup=True))
-    yassembler = neml2.VectorAssembler(model.output_axis(setup=True))
 
-    # Initialize the model with the correct batch shape
+    # The model is batched
     B = (2, 5)
 
     # Define the input
-    ndof = model.input_axis().size()
-    x = torch.linspace(0, 0.2, ndof).expand(*B, -1)
-    x = neml2.Tensor(x, len(B))
+    xv = torch.linspace(0, 0.2, 26).expand(*B, -1)
+    xv = neml2.Tensor(xv, len(B))
+    x = {
+        "strain": xv.base[:6],
+        "t": xv.base[6],
+        "strain~1": xv.base[7:13],
+        "t~1": xv.base[13],
+        "stress~1": xv.base[14:20],
+        "stress": xv.base[20:26],
+    }
 
     # Say I want to get the parameter gradient on the flow viscosity
     p = model.flow_rate_eta
     p.requires_grad_(True)
 
     # Evaluate the model and the loss function
-    y = model.value(xassembler.split_by_variable(x, False))
-    f = torch.norm(yassembler.assemble_by_variable(y, False).torch())
+    y = model.value(x)["stress"]
 
-    # # Get the parameter gradient
+    # Calculate the loss function
+    f = torch.norm(y.torch())
+
+    # Get the parameter gradient
     f.backward()
     assert math.isclose(p.grad.item(), 0.023917, rel_tol=1e-6, abs_tol=1e-6)

@@ -27,6 +27,18 @@
 
 namespace neml2
 {
+Size
+TensorValueBase::intmd_dim() const
+{
+  return _cached_intmd_dim;
+}
+
+Size
+TensorValueBase::static_dim() const
+{
+  return intmd_dim() + base_dim();
+}
+
 template <typename T>
 void
 TensorValue<T>::to_(const TensorOptions & options)
@@ -42,7 +54,8 @@ TensorValue<T>::requires_grad_(bool req)
 }
 
 template <typename T>
-TensorValue<T>::operator Tensor() const
+TensorValue<T>::
+operator Tensor() const
 {
   return _value;
 }
@@ -67,6 +80,20 @@ void
 TensorValue<T>::assign(const ATensor & val, TracerPrivilege /*key*/)
 {
   _value = T(val, _cached_intmd_dim);
+}
+
+template <typename T>
+Size
+TensorValue<T>::base_dim() const
+{
+  return T::const_base_dim;
+}
+
+template <>
+Size
+TensorValue<Tensor>::base_dim() const
+{
+  return _value.base_dim();
 }
 
 #define INSTANTIATE_TENSORVALUE(T) template class TensorValue<T>

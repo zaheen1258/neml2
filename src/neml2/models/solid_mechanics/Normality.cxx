@@ -23,7 +23,6 @@
 // THE SOFTWARE.
 
 #include "neml2/models/solid_mechanics/Normality.h"
-#include "neml2/base/guards.h"
 #include "neml2/misc/assertions.h"
 
 namespace neml2
@@ -37,24 +36,17 @@ Normality::expected_options()
   options.doc() = "Store the first derivatives of a scalar-valued function in given variables, "
                   "i.e. \\f$ u_i = \\dfrac{f(\\boldsymbol{v})}{v_i} \\f$.";
 
-  options.set<std::string>("model");
-  options.set("model").doc() = "The model which evaluates the scalar-valued function";
-
-  options.set<VariableName>("function");
-  options.set("function").doc() = "Function to take derivative";
-
-  options.set<std::vector<VariableName>>("from");
-  options.set("from").doc() = "Function arguments to take derivatives w.r.t.";
-
-  options.set<std::vector<VariableName>>("to");
-  options.set("to").doc() = "Variables to store the first derivatives";
+  options.add<std::string>("model", "The model which evaluates the scalar-valued function");
+  options.add<VariableName>("function", "Function to take derivative");
+  options.add<std::vector<VariableName>>("from", "Function arguments to take derivatives w.r.t.");
+  options.add<std::vector<VariableName>>("to", "Variables to store the first derivatives");
 
   return options;
 }
 
 Normality::Normality(const OptionSet & options)
   : Model(options),
-    _model(register_model(options.get<std::string>("model"))),
+    _model(register_model("model")),
     _f(options.get<VariableName>("function"))
 {
   // Set up the conjugate pairs
@@ -76,10 +68,10 @@ void
 Normality::set_value(bool out, bool dout_din, bool /*d2out_din2*/)
 {
   {
-    SolvingNonlinearSystem guard(false);
     // Since normality maps the derivatives to the output variables, we need to evaluate the
     // sub-model's derivatives if normality asks for output variables, and evaluate the sub-model's
     // second derivatives if normality asks for derivatives of output variables.
+    AssemblyingNonlinearSystem assembling_nl_sys(false);
     _model.forward_maybe_jit(false, out, dout_din);
   }
 
@@ -105,8 +97,8 @@ Normality::set_value(bool out, bool dout_din, bool /*d2out_din2*/)
 
     if (dout_din)
       for (const auto & [jname, jvar] : _model.input_variables())
-        if (jvar->is_dependent() && fvar.has_derivative(iname, jname))
-          ovar.d(*jvar) =
+        if (fvar.has_derivative(iname, jname))
+          ovar.d(input_variable(jname)) =
               fvar.d2(*ivar, *jvar)
                   .tensor()
                   .base_reshape(utils::add_shapes(ivar->base_sizes(), jvar->base_sizes()));

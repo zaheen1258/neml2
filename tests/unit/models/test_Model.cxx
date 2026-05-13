@@ -29,77 +29,104 @@
 #include "neml2/neml2.h"
 #include "neml2/models/Variable.h"
 #include "neml2/tensors/tensors.h"
+#include "neml2/drivers/Driver.h"
 
 using namespace neml2;
 
 TEST_CASE("Model", "[models]")
 {
-  SECTION("variable type")
+  SECTION("set_output_derivative_filter")
   {
-    auto model = load_model("models/ComposedModel3.i", "model");
+    auto model = load_model("models/common/ScalarLinearCombination.i", "model");
 
-    REQUIRE(model->input_variable({FORCES, "t"}).type() == TensorType::kScalar);
-    REQUIRE(model->input_variable({FORCES, "temperature"}).type() == TensorType::kScalar);
-    REQUIRE(model->input_variable({OLD_FORCES, "t"}).type() == TensorType::kScalar);
-    REQUIRE(model->input_variable({OLD_STATE, "bar"}).type() == TensorType::kScalar);
-    REQUIRE(model->input_variable({OLD_STATE, "baz"}).type() == TensorType::kSR2);
-    REQUIRE(model->input_variable({OLD_STATE, "foo"}).type() == TensorType::kScalar);
-    REQUIRE(model->input_variable({STATE, "bar"}).type() == TensorType::kScalar);
-    REQUIRE(model->input_variable({STATE, "baz"}).type() == TensorType::kSR2);
-    REQUIRE(model->input_variable({STATE, "foo"}).type() == TensorType::kScalar);
-    REQUIRE(model->output_variable({STATE, "sum"}).type() == TensorType::kScalar);
+    set_default_dtype(kFloat64);
+    ValueMap in;
+    in["A"] = Scalar::full(3.0);
+    in["B"] = Scalar::full(2.0);
 
-    REQUIRE(utils::stringify(model->input_variable({FORCES, "t"}).type()) == "Scalar");
-    REQUIRE(utils::stringify(model->input_variable({FORCES, "temperature"}).type()) == "Scalar");
-    REQUIRE(utils::stringify(model->input_variable({OLD_FORCES, "t"}).type()) == "Scalar");
-    REQUIRE(utils::stringify(model->input_variable({OLD_STATE, "bar"}).type()) == "Scalar");
-    REQUIRE(utils::stringify(model->input_variable({OLD_STATE, "baz"}).type()) == "SR2");
-    REQUIRE(utils::stringify(model->input_variable({OLD_STATE, "foo"}).type()) == "Scalar");
-    REQUIRE(utils::stringify(model->input_variable({STATE, "bar"}).type()) == "Scalar");
-    REQUIRE(utils::stringify(model->input_variable({STATE, "baz"}).type()) == "SR2");
-    REQUIRE(utils::stringify(model->input_variable({STATE, "foo"}).type()) == "Scalar");
-    REQUIRE(utils::stringify(model->output_variable({STATE, "sum"}).type()) == "Scalar");
+    SECTION("no filter returns all derivatives")
+    {
+      auto derivs = model->dvalue(in);
+      REQUIRE(derivs.count("C") == 1);
+      REQUIRE(derivs.at("C").count("A") == 1);
+      REQUIRE(derivs.at("C").count("B") == 1);
+    }
+
+    SECTION("filter restricts to requested pair")
+    {
+      model->set_output_derivative_filter({{"C", "A"}});
+      auto derivs = model->dvalue(in);
+      REQUIRE(derivs.count("C") == 1);
+      REQUIRE(derivs.at("C").count("A") == 1);
+      REQUIRE(derivs.at("C").count("B") == 0);
+    }
+
+    SECTION("clearing filter restores all derivatives")
+    {
+      model->set_output_derivative_filter({{"C", "A"}});
+      model->set_output_derivative_filter({});
+      auto derivs = model->dvalue(in);
+      REQUIRE(derivs.count("C") == 1);
+      REQUIRE(derivs.at("C").count("A") == 1);
+      REQUIRE(derivs.at("C").count("B") == 1);
+    }
+
+    SECTION("filter applies to value_and_dvalue")
+    {
+      model->set_output_derivative_filter({{"C", "B"}});
+      auto [vals, derivs] = model->value_and_dvalue(in);
+      REQUIRE(vals.count("C") == 1);
+      REQUIRE(derivs.count("C") == 1);
+      REQUIRE(derivs.at("C").count("A") == 0);
+      REQUIRE(derivs.at("C").count("B") == 1);
+    }
+
+    SECTION("changing filter after evaluation uses the new filter")
+    {
+      // First evaluation with filter on A — traces the JIT graph
+      model->set_output_derivative_filter({{"C", "A"}});
+      {
+        auto derivs = model->dvalue(in);
+        REQUIRE(derivs.at("C").count("A") == 1);
+        REQUIRE(derivs.at("C").count("B") == 0);
+      }
+
+      // Change filter to B — must invalidate the old traced graph and re-trace
+      model->set_output_derivative_filter({{"C", "B"}});
+      {
+        auto derivs = model->dvalue(in);
+        REQUIRE(derivs.at("C").count("A") == 0);
+        REQUIRE(derivs.at("C").count("B") == 1);
+      }
+    }
   }
 
-  SECTION("diagnose")
+  SECTION("variable type")
   {
-    SECTION("input variables")
-    {
-      auto model = load_model("models/test_Model_diagnose1.i", "model");
-      auto diagnoses = diagnose(*model);
+    auto model = load_model("models/common/ComposedModel3.i", "model");
 
-      REQUIRE(diagnoses.size() == 2);
-      REQUIRE_THAT(
-          diagnoses[0].what(),
-          Catch::Matchers::ContainsSubstring(
-              "Input variable whatever/foo_rate must be on one of the following sub-axes"));
-      REQUIRE_THAT(diagnoses[1].what(),
-                   Catch::Matchers::ContainsSubstring(
-                       "Variable whatever/foo_rate must be on the state sub-axis"));
-    }
+    REQUIRE(model->input_variable("t").type() == TensorType::kScalar);
+    REQUIRE(model->input_variable("T").type() == TensorType::kScalar);
+    REQUIRE(model->input_variable("bar").type() == TensorType::kScalar);
+    REQUIRE(model->input_variable("baz").type() == TensorType::kSR2);
+    REQUIRE(model->input_variable("foo").type() == TensorType::kScalar);
+    REQUIRE(model->output_variable("sum").type() == TensorType::kScalar);
 
-    SECTION("output variables")
-    {
-      auto model = load_model("models/test_Model_diagnose2.i", "model");
-      auto diagnoses = diagnose(*model);
+    REQUIRE(utils::stringify(model->input_variable("t").type()) == "Scalar");
+    REQUIRE(utils::stringify(model->input_variable("T").type()) == "Scalar");
+    REQUIRE(utils::stringify(model->input_variable("bar").type()) == "Scalar");
+    REQUIRE(utils::stringify(model->input_variable("baz").type()) == "SR2");
+    REQUIRE(utils::stringify(model->input_variable("foo").type()) == "Scalar");
+    REQUIRE(utils::stringify(model->output_variable("sum").type()) == "Scalar");
+  }
 
-      REQUIRE(diagnoses.size() == 1);
-      REQUIRE_THAT(diagnoses[0].what(),
-                   Catch::Matchers::ContainsSubstring(
-                       "Output variable whatever/foo must be on one of the following sub-axes"));
-    }
-
-    SECTION("nonlinear system")
-    {
-      auto model = load_model("models/test_Model_diagnose3.i", "model");
-      auto diagnoses = diagnose(*model);
-
-      REQUIRE(diagnoses.size() == 1);
-      REQUIRE_THAT(
-          diagnoses[0].what(),
-          Catch::Matchers::ContainsSubstring(
-              "This model is part of a nonlinear system. At least one of the input variables is "
-              "solve-dependent, so all output variables MUST be solve-dependent"));
-    }
+  SECTION("graph execution exception")
+  {
+    auto factory = load_input("models/test_graph_execution_exception.i");
+    auto driver = factory->get_driver("driver");
+    REQUIRE_THROWS_WITH(
+        driver->run(),
+        Catch::Matchers::ContainsSubstring(
+            "Try turning off just-in-time (JIT) compilation to get more detailed error messages."));
   }
 }

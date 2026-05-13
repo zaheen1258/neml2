@@ -23,14 +23,15 @@
 // THE SOFTWARE.
 
 #include "neml2/models/ImplicitUpdate.h"
-#include "neml2/models/Assembler.h"
-#include "neml2/solvers/NonlinearSolver.h"
-#include "neml2/tensors/functions/linalg/lu_factor.h"
-#include "neml2/tensors/functions/linalg/lu_solve.h"
 #include "neml2/misc/assertions.h"
+#include "neml2/misc/errors.h"
+#include "neml2/models/ModelNonlinearSystem.h"
+#include "neml2/equation_systems/AssembledVector.h"
+#include "neml2/equation_systems/AssembledMatrix.h"
 
 namespace neml2
 {
+
 register_NEML2_object(ImplicitUpdate);
 
 OptionSet
@@ -38,134 +39,151 @@ ImplicitUpdate::expected_options()
 {
   OptionSet options = Model::expected_options();
   options.doc() =
-      "Update an implicit model by solving the underlying implicit system of equations.";
+      "Update an implicit model by solving the underlying nonlinear system of equations.";
 
-  options.set<std::string>("implicit_model");
-  options.set("implicit_model").doc() =
-      "The implicit model defining the implicit system of equations to be solved";
-
-  options.set<std::string>("solver");
-  options.set("solver").doc() = "Solver used to solve the implicit system";
+  options.add<std::string>("equation_system", "The nonlinear system of equations to solve");
+  options.add<std::string>("solver", "Solver used to solve the nonlinear system of equations");
+  options.add_optional<std::string>(
+      "predictor", "An optional predictor to provide an initial guess for the nonlinear solve.");
 
   // No jitting :/
-  options.set<bool>("jit") = false;
-  options.set("jit").suppressed() = true;
+  options.set<bool>("jit", false);
+  options.suppress("jit");
 
   return options;
 }
 
 ImplicitUpdate::ImplicitUpdate(const OptionSet & options)
   : Model(options),
-    _model(register_model("implicit_model", /*nonlinear=*/true)),
+    _sys(get_es<ModelNonlinearSystem>("equation_system")),
     _solver(get_solver<NonlinearSolver>("solver"))
 {
+  auto ulayout = _sys->ulayout();
+  auto blayout = _sys->blayout();
+  neml_assert(
+      blayout.ngroup() == ulayout.ngroup(),
+      "The unknown variables and residuals of the nonlinear system must have the same number of "
+      "groups. Got ",
+      ulayout.ngroup(),
+      " and ",
+      blayout.ngroup(),
+      ".");
+  neml_assert(blayout.nvar() == ulayout.nvar(),
+              "The number of unknown variables and residuals of the nonlinear system must be the "
+              "same. Got ",
+              ulayout.nvar(),
+              " and ",
+              blayout.nvar(),
+              ".");
+
+  // Register the predictor if provided
+  if (options.defined("predictor"))
+  {
+    _predictor = get_model<Model>(options.get<std::string>("predictor"));
+    register_model(_predictor, /*merge_input=*/true);
+  }
+
   // Take care of dependency registration:
-  //   1. Input variables of the "implicit_model" should be *consumed* by *this* model. This has
-  //      already been taken care of by the `register_model` call.
+  //   1. Input variables of the "implicit_model" should be *consumed* by *this* model.
   //   2. Output variables of the "implicit_model" on the "residual" subaxis should be *provided* by
   //      *this* model.
-  for (auto && [name, var] : _model.output_variables())
-    clone_output_variable(*var, name.remount(STATE));
+  const auto model = _sys->model_ptr();
+  register_model(model, /*merge_input=*/false);
+  for (const auto & [name, var] : model->input_variables())
+  {
+    if (_predictor && _predictor->output_variables().count(name))
+      continue; // This variable will be provided by the predictor
+    if (input_variables().find(name) == input_variables().end())
+      clone_input_variable(*var);
+  }
+  for (std::size_t i = 0; i < blayout.nvar(); ++i)
+  {
+    const auto & u = model->input_variable(ulayout.var(i));
+    clone_output_variable(u);
+  }
+
+  // During the iterative nonlinear solve, the sub-model's nl_sys JIT graph only needs residual
+  // derivatives w.r.t. unknowns (for the Jacobian A = dr/du). Derivatives w.r.t. given variables
+  // (dr/dg) are never used during the solve — only once post-convergence for the IFT step, which
+  // runs outside the nl_sys assembly context. Pre-setting this filter here ensures the nl_sys JIT
+  // graph is built correctly from the very first assembly and is never invalidated again.
+  std::vector<std::pair<VariableName, VariableName>> nl_sys_pairs;
+  nl_sys_pairs.reserve(blayout.nvar() * ulayout.nvar());
+  for (std::size_t i = 0; i < blayout.nvar(); i++)
+    for (std::size_t j = 0; j < ulayout.nvar(); j++)
+      nl_sys_pairs.emplace_back(blayout.var(i), ulayout.var(j));
+  model->set_output_derivative_filter_nl_sys(nl_sys_pairs);
 }
 
 void
-ImplicitUpdate::diagnose() const
+ImplicitUpdate::link_input_variables(Model * submodel)
 {
-  Model::diagnose();
-  // diagnostic_assert(_model.output_axis().has_residual(),
-  //                   "The implicit model'",
-  //                   _model.name(),
-  //                   "' registered in '",
-  //                   name(),
-  //                   "' does not have the residual output axis.");
-  // diagnostic_assert(_model.output_axis().nsubaxis() == 1,
-  //                   "The implicit model's output contains non-residual subaxis:\n",
-  //                   _model.output_axis());
-  // diagnostic_assert(_model.input_axis().has_state(),
-  //                   "The implicit model's input does not have a state subaxis:\n",
-  //                   _model.input_axis());
-  // diagnostic_assert(!_model.input_axis().has_residual(),
-  //                   "The implicit model's input cannot have a residual subaxis:\n",
-  //                   _model.input_axis());
-  // diagnostic_assert(
-  //     _model.input_axis().subaxis(STATE) == _model.output_axis().subaxis(RESIDUAL),
-  //     "The implicit model should have conformal trial state and residual. The input state "
-  //     "subaxis is\n",
-  //     _model.input_axis().subaxis(STATE),
-  //     "\nThe output residual subaxis is\n",
-  //     _model.output_axis().subaxis(RESIDUAL));
+  // if a predictor is given, sub-model's input unknowns are directly set by the predictor
+  if (_predictor && submodel == _sys->model_ptr().get())
+  {
+    for (auto && [name, var] : submodel->input_variables())
+      if (input_variables().count(name))
+        var->ref(input_variable(name));
+    return;
+  }
+  Model::link_input_variables(submodel);
 }
 
 void
-ImplicitUpdate::link_output_variables()
+ImplicitUpdate::to(const TensorOptions & options)
 {
-  Model::link_output_variables();
-  for (auto && [name, var] : output_variables())
-    var->ref(input_variable(name), /*ref_is_mutable=*/true);
+  Model::to(options);
+  _sys->to(options);
+  _solver->to(options);
 }
 
 void
 ImplicitUpdate::set_value(bool out, bool dout_din, bool /*d2out_din2*/)
 {
-  // The trial state is used as the initial guess
-  const auto sol_assember = VectorAssembler(_model.input_axis().subaxis(STATE));
-  auto x0 = NonlinearSystem::Sol<false>(
-      sol_assember.assemble_by_variable(_model.collect_input(/*assembly=*/true)));
+  // Apply the predictor
+  if (_predictor)
+    apply_predictor();
 
-  // Perform automatic scaling (using the trial state)
-  // TODO: Add an interface to allow user to specify where (and when) to evaluate the Jacobian for
-  // automatic scaling.
-  _model.init_scaling(x0, _solver->verbose);
+  // Input variable values may have been changed outside the forward operator, so let's notify the
+  // system about the potential changes, just to stay on the safe side.
+  _sys->u_changed();
+  _sys->g_changed();
 
   // Solve for the next state
-  NonlinearSolver::Result res;
-  {
-    SolvingNonlinearSystem solving;
-    res = _solver->solve(_model, x0);
-    _last_iterations = res.iterations;
-    neml_assert(res.ret == NonlinearSolver::RetCode::SUCCESS, "Nonlinear solve failed.");
-  }
+  const auto res = _solver->solve(*_sys);
+  _last_iterations = res.iterations;
+  neml_assert(res.ret == NonlinearSolver::RetCode::SUCCESS, "Nonlinear solve failed.");
 
   if (out)
-  {
-    // You may be tempted to assign the solution, i.e., res.solution, to the output variables. But
-    // we don't have to. Think about it: The output variables share the same name as those input
-    // variables on the state subaxis, and since we don't duplicate storage for variables with the
-    // same name, they are essentially the same variable with FType::INPUT | FType::OUTPUT. During
-    // the nonlinear solve, we have to iteratively update the guess (i.e., the input variables on
-    // the state subaxis) until convergece. Once the nonlinear system has converged, the input
-    // variables on the state subaxis _must_ contain the solution. Therefore, the output variables
-    // _must_ also contain the solution upon convergence.
-
-    // All that being said, if the result has AD graph, we need to propagate the graph to the output
-    if (res.solution.requires_grad())
-      assign_output(sol_assember.split_by_variable(res.solution), /*assembly=*/true);
-  }
+    assign_output(_sys->u().disassemble());
 
   // Use the implicit function theorem (IFT) to calculate the other derivatives
   if (dout_din)
   {
-    // IFT requires the Jacobian evaluated at the solution:
-    _model.forward_maybe_jit(false, true, false);
-    const auto jac_assembler = MatrixAssembler(_model.output_axis(), _model.input_axis());
-    const auto J =
-        jac_assembler.assemble_by_variable(_model.collect_output_derivatives(/*assembly=*/true));
-    const auto derivs = jac_assembler.split_by_subaxis(J).at(RESIDUAL);
-    const auto dr_ds = derivs.at(STATE);
+    auto [A, B] = _sys->A_and_B();
+    auto du_dg = -_solver->linear_solver->solve(A, B);
 
-    // Factorize the Jacobian once and for all
-    const auto [LU, pivot] = linalg::lu_factor(dr_ds);
+    // assign derivatives back
+    assign_output_derivatives(du_dg.disassemble());
+  }
+}
 
-    // The actual IFT:
-    for (const auto & [subaxis, deriv] : derivs)
-    {
-      if (subaxis == STATE)
-        continue;
-      const auto ift_assembler =
-          MatrixAssembler(output_axis(), _model.input_axis().subaxis(subaxis));
-      assign_output_derivatives(
-          ift_assembler.split_by_variable(-linalg::lu_solve(LU, pivot, deriv)), /*assembly=*/true);
-    }
+void
+ImplicitUpdate::apply_predictor()
+{
+  neml_assert_dbg(_predictor != nullptr,
+                  "No predictor model is registered for this ImplicitUpdate.");
+  _predictor->forward_maybe_jit(true, false, false);
+  for (const auto & [vname, var] : _predictor->output_variables())
+  {
+    auto ivar = _sys->model_ptr()->input_variables().find(vname);
+    if (ivar == _sys->model_ptr()->input_variables().end())
+      throw NEMLException("Predictor variable '" + vname +
+                          "' is not an input variable of the implicit model.");
+    if (!ivar->second->is_mutable())
+      throw NEMLException("Predictor variable '" + vname +
+                          "' is not a mutable input variable of the implicit model.");
+    *ivar->second = var->tensor();
   }
 }
 } // namespace neml2

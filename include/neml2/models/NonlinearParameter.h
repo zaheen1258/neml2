@@ -25,13 +25,13 @@
 #pragma once
 
 #include <memory>
-
-#include "neml2/base/LabeledAxisAccessor.h"
+#include <string>
 
 namespace neml2
 {
 class Model;
 class VariableBase;
+using VariableName = std::string;
 
 /**
  * @brief Nonlinear parameter
@@ -53,7 +53,7 @@ struct NonlinearParameter
   std::shared_ptr<Model> provider = nullptr;
   /// The variable name of the model that defines this parameter
   VariableName provider_var;
-  /// The actual parameter value
+  /// The input variable referencing the provider variable who holds the parameter value
   const VariableBase * value = nullptr;
 };
 } // namespace neml2

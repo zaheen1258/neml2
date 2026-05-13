@@ -24,7 +24,82 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
+import re
+import subprocess
+from loguru import logger
+import shutil
+from string import Template
+from pathlib import Path
+
 
 def pad_leading_space(line: list[str], space: int) -> list[str]:
     """Pads the leading space of a line by the given amount."""
     return [" " * space + l for l in line]
+
+
+def quiet_run_and_log(command: list[str], **kwargs) -> bool:
+    """Runs a command and logs the output."""
+    logger.trace("running command: {}", " ".join(command))
+
+    # check if the command exists
+    path = shutil.which(command[0])
+    if path is None:
+        logger.trace(f"{command[0]} not found in PATH")
+        return False
+
+    # run the command and log the output
+    result = subprocess.run(command, capture_output=True, text=True, **kwargs)
+    if result.returncode == 0:
+        logger.trace("command succeeded")
+    else:
+        logger.trace("command failed with return code {}: {}", result.returncode, " ".join(command))
+        logger.trace("stdout:")
+        for line in result.stdout.splitlines():
+            logger.trace("  {}", line)
+        logger.trace("stderr:")
+        for line in result.stderr.splitlines():
+            logger.trace("  {}", line)
+    return result.returncode == 0
+
+
+def merge_files(files: list[Path], dest: Path):
+    with open(dest, "w") as out:
+        for file in files:
+            with open(file, "r") as f:
+                out.write(f.read())
+                out.write("\n")
+
+
+def fix_math_for_doxygen(md_path: Path):
+    """Convert LaTeX math delimiters in a markdown file to Doxygen-compatible format.
+
+    Conversions applied (in order):
+      \\[ ... \\]   ->  \\f[ ... \\f]   (display math)
+      $$ ... $$    ->  \\f[ ... \\f]   (display math)
+      $ ... $      ->  \\f$ ... \\f$   (inline math)
+    """
+    content = md_path.read_text()
+
+    # \[ ... \] -> \f[ ... \f]  (may span multiple lines)
+    content = re.sub(r"\\\[(.+?)\\\]", r"\\f[\1\\f]", content, flags=re.DOTALL)
+
+    # $$ ... $$ -> \f[ ... \f]  (may span multiple lines; process before single $)
+    content = re.sub(r"\$\$(.+?)\$\$", r"\\f[\1\\f]", content, flags=re.DOTALL)
+
+    # $ ... $ -> \f$ ... \f$  (inline, single line only; skip $$ by lookaround)
+    content = re.sub(r"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)", r"\\f$\1\\f$", content)
+
+    md_path.write_text(content)
+
+
+def render_file(template_path: Path, output_path: Path, variables: dict[str, str]):
+    text = Path(template_path).read_text()
+    tpl = Template(text)
+
+    try:
+        rendered = tpl.substitute(variables)
+    except KeyError as e:
+        logger.error(f"missing variable for substitution: {e}")
+        return
+
+    Path(output_path).write_text(rendered)

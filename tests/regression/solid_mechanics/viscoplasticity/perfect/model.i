@@ -40,10 +40,11 @@
 
 [Drivers]
   [driver]
-    type = SDTSolidMechanicsDriver
+    type = TransientDriver
     model = 'model'
     prescribed_time = 'times'
-    prescribed_strain = 'strains'
+    force_SR2_names = 'E'
+    force_SR2_values = 'strains'
     save_as = 'result.pt'
   []
   [regression]
@@ -53,21 +54,16 @@
   []
 []
 
-[Solvers]
-  [newton]
-    type = Newton
-  []
-[]
-
 [Models]
   [mandel_stress]
     type = IsotropicMandelStress
+    cauchy_stress = 'stress'
   []
   [vonmises]
     type = SR2Invariant
     invariant_type = 'VONMISES'
-    tensor = 'state/internal/M'
-    invariant = 'state/internal/s'
+    tensor = 'mandel_stress'
+    invariant = 'effective_stress'
   []
   [yield]
     type = YieldFunction
@@ -80,9 +76,9 @@
   [normality]
     type = Normality
     model = 'flow'
-    function = 'state/internal/fp'
-    from = 'state/internal/M'
-    to = 'state/internal/NM'
+    function = 'yield_function'
+    from = 'mandel_stress'
+    to = 'flow_direction'
   []
   [flow_rate]
     type = PerzynaPlasticFlowRate
@@ -94,14 +90,13 @@
   []
   [Erate]
     type = SR2VariableRate
-    variable = 'forces/E'
-    rate = 'forces/E_rate'
+    variable = 'E'
   []
   [Eerate]
     type = SR2LinearCombination
-    from_var = 'forces/E_rate state/internal/Ep_rate'
-    to_var = 'state/internal/Ee_rate'
-    coefficients = '1 -1'
+    from = 'E_rate plastic_strain_rate'
+    to = 'strain_rate'
+    weights = '1 -1'
   []
   [elasticity]
     type = LinearIsotropicElasticity
@@ -111,15 +106,42 @@
   []
   [integrate_stress]
     type = SR2BackwardEulerTimeIntegration
-    variable = 'state/S'
+    variable = 'stress'
   []
   [implicit_rate]
     type = ComposedModel
     models = 'mandel_stress vonmises yield normality flow_rate Eprate Erate Eerate elasticity integrate_stress'
   []
+[]
+
+[EquationSystems]
+  [eq_sys]
+    type = NonlinearSystem
+    model = 'implicit_rate'
+    unknowns = 'stress'
+    residuals = 'stress_residual'
+  []
+[]
+
+[Solvers]
+  [newton]
+    type = Newton
+    linear_solver = 'lu'
+  []
+  [lu]
+    type = DenseLU
+  []
+[]
+
+[Models]
+  [predictor]
+    type = ConstantExtrapolationPredictor
+    unknowns_SR2 = 'stress'
+  []
   [model]
     type = ImplicitUpdate
-    implicit_model = 'implicit_rate'
+    equation_system = 'eq_sys'
     solver = 'newton'
+    predictor = 'predictor'
   []
 []

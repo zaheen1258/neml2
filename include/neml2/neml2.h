@@ -26,6 +26,7 @@
 
 #include "neml2/base/Factory.h"
 #include "neml2/models/Model.h"
+#include "neml2/models/ModelNonlinearSystem.h"
 
 /**
  * Some neml2 libraries use the factory-registry pattern to dynamically register available
@@ -40,12 +41,21 @@
  * referenced when the library is used.
  */
 extern "C" void _neml2_force_link_models();
+extern "C" void _neml2_force_link_equation_systems();
 extern "C" void _neml2_force_link_solvers();
 extern "C" void _neml2_force_link_user_tensors();
 extern "C" void _neml2_force_link_drivers();
 
 namespace neml2
 {
+/**
+ * @brief Force linking of all runtime components
+ *
+ * This is a convenient function to call in the main executable to ensure that all runtime
+ * components are linked in. It simply calls all the force link functions defined above.
+ */
+void force_link_runtime();
+
 /**
  * @brief A convenient function to parse all options from an input file
  *

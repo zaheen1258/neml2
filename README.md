@@ -1,8 +1,7 @@
-# NEML2
+<img src="doc/asset/logo_light.png#gh-light-mode-only" class="logo-light" alt="Logo" style="width: 35%">
+<img src="doc/asset/logo_dark.png#gh-dark-mode-only" class="logo-dark" alt="Logo" style="width: 35%">
 
-![](doc/content/asset/cover_min.png)
-
-[![Documentation](https://github.com/applied-material-modeling/neml2/actions/workflows/build_docs.yml/badge.svg?branch=main)](https://applied-material-modeling.github.io/neml2/) [![C++ backend testing](https://github.com/applied-material-modeling/neml2/actions/workflows/cpp.yml/badge.svg?branch=main)](https://github.com/applied-material-modeling/neml2/actions/workflows/cpp.yml) [![Python package testing](https://github.com/applied-material-modeling/neml2/actions/workflows/python.yml/badge.svg?branch=main)](https://github.com/applied-material-modeling/neml2/actions/workflows/python.yml)
+[![Documentation](https://github.com/applied-material-modeling/neml2/actions/workflows/docs.yml/badge.svg?branch=main)](https://applied-material-modeling.github.io/neml2/) [![C++ backend testing](https://github.com/applied-material-modeling/neml2/actions/workflows/cpp.yml/badge.svg?branch=main)](https://github.com/applied-material-modeling/neml2/actions/workflows/cpp.yml) [![Python package testing](https://github.com/applied-material-modeling/neml2/actions/workflows/python.yml/badge.svg?branch=main)](https://github.com/applied-material-modeling/neml2/actions/workflows/python.yml)
 
 ## Overview
 
@@ -18,9 +17,13 @@ NEML2 is provided as open source software under a MIT [license](https://raw.gith
 >
 > NEML2 is _not_ a database of material models. There are many example material models in the library for testing and verification purposes. These models do not represent the response of any actual material.
 
+![](doc/asset/cover_min.png)
+
 ### Quick installation
 
 Building should be as easy as cloning the repository, configuring with CMake, compiling with `make`, and installing with `make install`. Refer to the [installation guide](https://applied-material-modeling.github.io/neml2/install.html) for more detailed instructions and finer control over various dependencies as well as other build customization.
+
+Once NEML2 is built/installed, refer to the [getting started](https://applied-material-modeling.github.io/neml2/tutorials-getting-started.html) guide for commonly used APIs.
 
 ### Features and design philosophy
 
@@ -53,7 +56,7 @@ The library is structured so that adding a new feature to an existing material m
 
 #### Friendly user interfaces
 
-There are three general ways of interfacing with NEML2 material models: the compiled C++ library, the Python package, and the Runner. In all interfaces, creation and archival of NEML2 models rely on input files written in the hierarchical [HIT](https://github.com/idaholab/moose/tree/master/framework/contrib/hit) format. NEML2 models created using the Python bindings are fully interoperable with PyTorch tensors and modules, meaning that NEML2 material models can seamlessly work with popular machine learning frameworks developed using PyTorch.
+There are three general ways of interfacing with NEML2 material models: the compiled C++ library, the Python package, and the runner. In all interfaces, creation and archival of NEML2 models rely on input files written in the hierarchical [HIT](https://github.com/idaholab/moose/tree/master/framework/contrib/hit) format. NEML2 models created using the Python bindings are fully interoperable with PyTorch tensors and modules, meaning that NEML2 material models can seamlessly work with popular machine learning frameworks developed using PyTorch.
 
 #### Strict quality assurance
 

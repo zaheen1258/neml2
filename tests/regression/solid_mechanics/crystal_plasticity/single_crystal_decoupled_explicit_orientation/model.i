@@ -104,29 +104,21 @@
 
 [Drivers]
   [driver]
-    type = LDISolidMechanicsDriver
+    type = TransientDriver
     model = 'model'
     prescribed_time = 'times'
-    prescribed_deformation_rate = 'deformation_rate'
-    prescribed_vorticity = 'vorticity'
-    ic_Rot_names = 'state/orientation'
+    force_SR2_names = 'deformation_rate'
+    force_SR2_values = 'deformation_rate'
+    force_WR2_names = 'vorticity'
+    force_WR2_values = 'vorticity'
+    ic_Rot_names = 'orientation'
     ic_Rot_values = 'initial_orientation'
-    predictor = 'PREVIOUS_STATE'
-    cp_warmup = true
-    cp_warmup_elastic_scale = 0.1
     save_as = 'result.pt'
   []
   [regression]
     type = TransientRegression
     driver = 'driver'
     reference = 'gold/result.pt'
-  []
-[]
-
-[Solvers]
-  [newton]
-    type = NewtonWithLineSearch
-    max_linesearch_iterations = 5
   []
 []
 
@@ -143,20 +135,21 @@
   ############################################################################
   # Sub-system #1 for updating elastic strain and internal variables
   ############################################################################
-  [euler_rodrigues_1]
+  [euler_rodrigues]
     type = RotationMatrix
-    from = 'forces/tmp/orientation'
-    to = 'state/orientation_matrix'
+    from = 'orientation~1'
+    to = 'orientation_matrix'
   []
-  [elasticity_1]
+  [elasticity]
     type = LinearIsotropicElasticity
     coefficients = '1e5 0.25'
     coefficient_types = 'YOUNGS_MODULUS POISSONS_RATIO'
-    strain = 'state/elastic_strain'
-    stress = 'state/internal/cauchy_stress'
+    strain = 'elastic_strain'
+    stress = 'cauchy_stress'
   []
   [resolved_shear]
     type = ResolvedShear
+    stress = 'cauchy_stress'
   []
   [elastic_stretch]
     type = ElasticStrainRate
@@ -183,98 +176,88 @@
   []
   [integrate_slip_hardening]
     type = ScalarBackwardEulerTimeIntegration
-    variable = 'state/internal/slip_hardening'
+    variable = 'slip_hardening'
   []
   [integrate_elastic_strain]
     type = SR2BackwardEulerTimeIntegration
-    variable = 'state/elastic_strain'
+    variable = 'elastic_strain'
   []
   [implicit_rate_1]
     type = ComposedModel
-    models = "euler_rodrigues_1 elasticity_1 resolved_shear
+    models = "euler_rodrigues elasticity resolved_shear
               elastic_stretch plastic_deformation_rate
               sum_slip_rates slip_rule slip_strength voce_hardening
               integrate_slip_hardening integrate_elastic_strain"
   []
+[]
+
+[EquationSystems]
+  [eq_sys]
+    type = NonlinearSystem
+    model = 'implicit_rate_1'
+    unknowns = 'elastic_strain slip_hardening'
+    residuals = 'elastic_strain_residual slip_hardening_residual'
+  []
+[]
+
+[Solvers]
+  [newton]
+    type = NewtonWithLineSearch
+    max_linesearch_iterations = 5
+    linear_solver = 'lu'
+  []
+  [lu]
+    type = DenseLU
+  []
+[]
+
+[Models]
+  [cp_warmup_1]
+    type = CrystalPlasticityStrainPredictor
+    scale = 0.1
+  []
+  [cp_warmup_2]
+    type = ConstantExtrapolationPredictor
+    unknowns_Scalar = 'slip_hardening'
+  []
+  [predictor]
+    type = ComposedModel
+    models = 'cp_warmup_1 cp_warmup_2'
+  []
   [subsystem1]
     type = ImplicitUpdate
-    implicit_model = 'implicit_rate_1'
+    equation_system = 'eq_sys'
     solver = 'newton'
+    predictor = 'predictor'
   []
-
   ############################################################################
-  # Sub-system #2 for updating orientation
+  # Sub-system #2 for updating orientation (explicit)
   ############################################################################
-  [euler_rodrigues_2]
-    type = RotationMatrix
-    from = 'old_state/orientation'
-    to = 'state/orientation_matrix'
-  []
-  [elasticity_2]
-    type = LinearIsotropicElasticity
-    coefficients = '1e5 0.25'
-    coefficient_types = 'YOUNGS_MODULUS POISSONS_RATIO'
-    strain = 'forces/tmp/elastic_strain'
-    stress = 'state/internal/cauchy_stress'
-  []
   [orientation_rate]
     type = OrientationRate
-    elastic_strain = 'forces/tmp/elastic_strain'
+    elastic_strain = 'elastic_strain'
   []
   [plastic_spin]
     type = PlasticVorticity
   []
-  [slip_strength_2]
-    type = SingleSlipStrengthMap
-    constant_strength = 50.0
-    slip_hardening = 'forces/tmp/internal/slip_hardening'
-  []
   [integrate_orientation]
     type = WR2ExplicitExponentialTimeIntegration
-    variable = 'state/orientation'
+    variable = 'orientation'
   []
   [subsystem2]
     type = ComposedModel
-    models = "euler_rodrigues_2 elasticity_2 resolved_shear
+    models = "euler_rodrigues elasticity resolved_shear
               plastic_deformation_rate plastic_spin
-              slip_rule slip_strength_2 orientation_rate
+              slip_rule slip_strength orientation_rate
               integrate_orientation"
   []
-
-  ############################################################################
-  # Cache information from sub-system #1
-  ############################################################################
-  [cache_elastic_strain]
-    type = CopySR2
-    from = 'state/elastic_strain'
-    to = 'forces/tmp/elastic_strain'
-  []
-  [cache_slip_hardening]
-    type = CopyScalar
-    from = 'state/internal/slip_hardening'
-    to = 'forces/tmp/internal/slip_hardening'
-  []
-  [cache1]
-    type = ComposedModel
-    models = 'cache_elastic_strain cache_slip_hardening'
-  []
-
-  ############################################################################
-  # Cache information from sub-system #2
-  ############################################################################
-  [cache2]
-    type = CopyRot
-    from = 'state/orientation'
-    to = 'forces/tmp/orientation'
-  []
-
   ############################################################################
   # Sequentially update sub-system #1 and sub-system #2
   ############################################################################
   [model]
     type = ComposedModel
-    models = 'cache2 subsystem1 cache1 subsystem2'
-    priority = 'cache2 subsystem1 cache1 subsystem2'
-    additional_outputs = 'state/elastic_strain state/internal/slip_hardening'
+    models = 'subsystem1 subsystem2'
+    priority = 'subsystem1 subsystem2'
+    additional_outputs = 'elastic_strain slip_hardening'
   []
 []

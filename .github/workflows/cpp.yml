@@ -14,34 +14,30 @@ concurrency:
 jobs:
   clang-format:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        path:
-          - "src"
-          - "include"
-          - "tests"
     steps:
       - uses: actions/checkout@v4
-      - name: Run clang-format style check
-        uses: jidicula/clang-format-action@v4.11.0
+      - uses: pre-commit/action@v3.0.1
         with:
-          clang-format-version: "19"
-          check-path: ${{ matrix.path }}
+          extra_args: clang-format --all-files --show-diff-on-failure -v
 
   test:
     needs: clang-format
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        runner: [ubuntu-latest, macos-latest, gpu_runner]
         btype: [Debug, Release]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: applied-material-modeling/neml2-ci@main
         with:
+          # dependencies: python.version_min
           python-version: 3.9
-          cmake-version: 3.26
+          # dependencies: cmake.version_min
+          cmake-version: 3.26.1
+          # dependencies: torch.version
           torch-version: 2.8.0
+          cpu-torch: ${{ matrix.runner != 'gpu_runner' && 'true' || 'false' }}
       - name: Configure
         if: matrix.btype == 'Release'
         run: cmake --preset dev -GNinja -DCMAKE_BUILD_TYPE=Release -S .
@@ -49,18 +45,22 @@ jobs:
         if: matrix.btype != 'Release'
         run: cmake --preset dev -GNinja -DCMAKE_BUILD_TYPE=${{ matrix.btype }} -DCMAKE_CXX_FLAGS="-Werror" -S .
       - name: Build
-        run: cmake --build --preset dev-cpp
+        run: cmake --build --preset dev
       - name: Run tests
+        env:
+          TEST_DEVICE_ARGS: ${{ matrix.runner == 'gpu_runner' && '--devices cuda' || '' }}
         run: |
-          ./build/dev/tests/unit/unit_tests -r JUnit::out=unit_tests.xml -r console::out=-::colour-mode=ansi
-          ./build/dev/tests/regression/regression_tests -r JUnit::out=regression_tests.xml -r console::out=-::colour-mode=ansi
-          ./build/dev/tests/verification/verification_tests -r JUnit::out=verification_tests.xml -r console::out=-::colour-mode=ansi
-          ./build/dev/tests/dispatchers/dispatcher_tests -r JUnit::out=dispatcher_tests.xml -r console::out=-::colour-mode=ansi
+          ./build/dev/tests/unit/tensor_tests $TEST_DEVICE_ARGS -r JUnit::out=tensor_tests.xml -r console::out=-::colour-mode=ansi
+          ./build/dev/tests/unit/unit_tests $TEST_DEVICE_ARGS -r JUnit::out=unit_tests.xml -r console::out=-::colour-mode=ansi
+          ./build/dev/tests/regression/regression_tests $TEST_DEVICE_ARGS -r JUnit::out=regression_tests.xml -r console::out=-::colour-mode=ansi
+          ./build/dev/tests/verification/verification_tests $TEST_DEVICE_ARGS -r JUnit::out=verification_tests.xml -r console::out=-::colour-mode=ansi
+          ./build/dev/tests/dispatchers/dispatcher_tests $TEST_DEVICE_ARGS -r JUnit::out=dispatcher_tests.xml -r console::out=-::colour-mode=ansi
       - name: Test results
         uses: EnricoMi/publish-unit-test-result-action/linux@v2
         if: always()
         with:
           files: |
+            tests/unit/tensor_tests.xml
             tests/unit/unit_tests.xml
             tests/regression/regression_tests.xml
             tests/verification/verification_tests.xml
@@ -76,13 +76,16 @@ jobs:
     steps:
       - uses: applied-material-modeling/neml2-ci@main
         with:
+          # dependencies: python.version_min
           python-version: 3.9
-          cmake-version: 3.26
+          # dependencies: cmake.version_min
+          cmake-version: 3.26.1
+          # dependencies: torch.version
           torch-version: 2.8.0
       - name: Configure
         run: cmake --preset dev -GNinja -DNEML2_PCH=OFF -S .
       - name: Build
-        run: cmake --build --preset dev-cpp
+        run: cmake --build --preset dev
 
   no-optional:
     needs: clang-format
@@ -90,15 +93,18 @@ jobs:
     steps:
       - uses: applied-material-modeling/neml2-ci@main
         with:
+          # dependencies: python.version_min
           python-version: 3.9
-          cmake-version: 3.26
+          # dependencies: cmake.version_min
+          cmake-version: 3.26.1
+          # dependencies: torch.version
           torch-version: 2.8.0
       - name: Configure
-        run: cmake --preset dev -GNinja -DNEML2_JSON=OFF -DNEML2_CSV=OFF -S .
+        run: cmake --preset dev -GNinja -DNEML2_JSON=OFF -DNEML2_CSV=OFF -DNEML2_WORK_DISPATCHER=OFF -S .
       - name: Build
-        run: cmake --build --preset dev-cpp
+        run: cmake --build --preset dev
 
-  runner:
+  release:
     needs: clang-format
     strategy:
       matrix:
@@ -107,15 +113,18 @@ jobs:
     steps:
       - uses: applied-material-modeling/neml2-ci@main
         with:
+          # dependencies: python.version_min
           python-version: 3.9
-          cmake-version: 3.26
+          # dependencies: cmake.version_min
+          cmake-version: 3.26.1
+          # dependencies: torch.version
           torch-version: 2.8.0
       - name: Configure
-        run: cmake --preset runner -GNinja -S .
+        run: cmake --preset release -GNinja -S .
       - name: Build
-        run: cmake --build --preset runner
-      - name: Run tests
-        run: ctest --preset runner --output-on-failure
+        run: cmake --build --preset release
+      - name: Run benchmark tests
+        run: ctest --preset benchmark --output-on-failure
 
   profiling:
     needs: clang-format
@@ -126,8 +135,11 @@ jobs:
     steps:
       - uses: applied-material-modeling/neml2-ci@main
         with:
+          # dependencies: python.version_min
           python-version: 3.9
-          cmake-version: 3.26
+          # dependencies: cmake.version_min
+          cmake-version: 3.26.1
+          # dependencies: torch.version
           torch-version: 2.8.0
       - name: Configure
         run: cmake --preset profiling -GNinja -S .
@@ -135,7 +147,7 @@ jobs:
         run: cmake --build --preset profiling
       - name: Check profile generation
         run: |
-          CPUPROFILE=prof.out ./build/profiling/runner/runner time runner/benchmark/elasticity/model.i driver nbatch=1 device=cpu
+          CPUPROFILE=prof.out ./build/profiling/src/tools/neml2-time benchmark/elasticity/model.i driver nbatch=1 device=cpu
           [[ -f prof.out ]]
 
   thread-sanitizer:
@@ -147,8 +159,11 @@ jobs:
     steps:
       - uses: applied-material-modeling/neml2-ci@main
         with:
+          # dependencies: python.version_min
           python-version: 3.9
-          cmake-version: 3.26
+          # dependencies: cmake.version_min
+          cmake-version: 3.26.1
+          # dependencies: torch.version
           torch-version: 2.8.0
       - name: Configure
         run: cmake --preset tsan -GNinja -S .

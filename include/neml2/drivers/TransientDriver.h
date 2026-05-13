@@ -63,14 +63,10 @@ protected:
   virtual void update_forces();
   /// Apply the initial conditions.
   virtual void apply_ic();
-  /// Apply the predictor to calculate the initial guess for the current time step.
-  virtual void apply_predictor();
   /// Perform the constitutive update for the current time step.
   virtual void solve_step();
   /// Postprocess the output of the current time step.
   virtual void postprocess();
-  /// Save the input of the current time step.
-  virtual void store_input();
   // @}
 
   /// VariableName for the time
@@ -81,11 +77,6 @@ protected:
   Size _step_count = 0;
   /// Total number of steps
   const Size _nsteps;
-  /// The input to the constitutive model
-  ValueMap _in;
-
-  /// The predictor used to set the initial guess
-  const EnumSelection _predictor;
 
   /// Inputs from all time steps
   std::vector<ValueMap> _result_in;
@@ -123,8 +114,5 @@ private:
   /// Output in torchscript format
   void output_pt(const std::filesystem::path & out) const;
   ///@}
-
-  /// Whether the model requires initial guesses for the state variables
-  bool _has_input_state = false;
 };
 } // namespace neml2

@@ -40,22 +40,17 @@
 
 [Drivers]
   [driver]
-    type = SDTSolidMechanicsDriver
+    type = TransientDriver
     model = 'model'
     prescribed_time = 'times'
-    prescribed_strain = 'strains'
+    force_SR2_names = 'E'
+    force_SR2_values = 'strains'
     save_as = 'result.pt'
   []
   [regression]
     type = TransientRegression
     driver = 'driver'
     reference = 'gold/result.pt'
-  []
-[]
-
-[Solvers]
-  [newton]
-    type = Newton
   []
 []
 
@@ -68,37 +63,40 @@
   [kinharden]
     type = LinearKinematicHardening
     hardening_modulus = 1000
+    back_stress = 'X'
   []
   [elastic_strain]
     type = SR2LinearCombination
-    from_var = 'forces/E state/internal/Ep'
-    to_var = 'state/internal/Ee'
-    coefficients = '1 -1'
+    from = 'E plastic_strain'
+    to = 'elastic_strain'
+    weights = '1 -1'
   []
   [elasticity]
     type = LinearIsotropicElasticity
     coefficients = '1e5 0.3'
     coefficient_types = 'YOUNGS_MODULUS POISSONS_RATIO'
+    strain = 'elastic_strain'
   []
   [mandel_stress]
     type = IsotropicMandelStress
+    cauchy_stress = 'stress'
   []
   [overstress]
     type = SR2LinearCombination
-    to_var = 'state/internal/O'
-    from_var = 'state/internal/M state/internal/X'
-    coefficients = '1 -1'
+    to = 'O'
+    from = 'mandel_stress X'
+    weights = '1 -1'
   []
   [vonmises]
     type = SR2Invariant
     invariant_type = 'VONMISES'
-    tensor = 'state/internal/O'
-    invariant = 'state/internal/s'
+    tensor = 'O'
+    invariant = 'effective_stress'
   []
   [yield]
     type = YieldFunction
     yield_stress = 1000
-    isotropic_hardening = 'state/internal/k'
+    isotropic_hardening = 'isotropic_hardening'
   []
   [flow]
     type = ComposedModel
@@ -107,9 +105,9 @@
   [normality]
     type = Normality
     model = 'flow'
-    function = 'state/internal/fp'
-    from = 'state/internal/M state/internal/X state/internal/k'
-    to = 'state/internal/NM state/internal/NX state/internal/Nk'
+    function = 'yield_function'
+    from = 'mandel_stress X isotropic_hardening'
+    to = 'flow_direction kinematic_hardening_direction isotropic_hardening_direction'
   []
   [eprate]
     type = AssociativeIsotropicPlasticHardening
@@ -122,18 +120,21 @@
   []
   [integrate_ep]
     type = ScalarBackwardEulerTimeIntegration
-    variable = 'state/internal/ep'
+    variable = 'equivalent_plastic_strain'
   []
   [integrate_Kp]
     type = SR2BackwardEulerTimeIntegration
-    variable = 'state/internal/Kp'
+    variable = 'kinematic_plastic_strain'
   []
   [integrate_Ep]
     type = SR2BackwardEulerTimeIntegration
-    variable = 'state/internal/Ep'
+    variable = 'plastic_strain'
   []
   [consistency]
-    type = RateIndependentPlasticFlowConstraint
+    type = FBComplementarity
+    a = 'yield_function'
+    a_inequality = 'LE'
+    b = 'flow_rate'
   []
   [surface]
     type = ComposedModel
@@ -142,14 +143,42 @@
               yield normality eprate Kprate Eprate
               consistency integrate_ep integrate_Kp integrate_Ep"
   []
+[]
+
+[EquationSystems]
+  [eq_sys]
+    type = NonlinearSystem
+    model = 'surface'
+    unknowns = 'plastic_strain kinematic_plastic_strain equivalent_plastic_strain flow_rate'
+    residuals = 'plastic_strain_residual kinematic_plastic_strain_residual equivalent_plastic_strain_residual complementarity'
+  []
+[]
+
+[Solvers]
+  [newton]
+    type = Newton
+    linear_solver = 'lu'
+  []
+  [lu]
+    type = DenseLU
+  []
+[]
+
+[Models]
+  [predictor]
+    type = ConstantExtrapolationPredictor
+    unknowns_SR2 = 'plastic_strain kinematic_plastic_strain'
+    unknowns_Scalar = 'equivalent_plastic_strain flow_rate'
+  []
   [return_map]
     type = ImplicitUpdate
-    implicit_model = 'surface'
+    equation_system = 'eq_sys'
     solver = 'newton'
+    predictor = 'predictor'
   []
   [model]
     type = ComposedModel
     models = 'return_map elastic_strain elasticity'
-    additional_outputs = 'state/internal/Ep state/internal/Kp state/internal/ep'
+    additional_outputs = 'plastic_strain kinematic_plastic_strain equivalent_plastic_strain'
   []
 []

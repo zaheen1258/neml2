@@ -42,12 +42,20 @@
         <tab type="user" url="../tutorials-optimization-parameter-calibration" title="Parameter calibration"/>
         <tab type="user" url="../tutorials-optimization-pyzag" title="pyzag"/>
       </tab>
+      <tab type="usergroup" url="../tutorials-notebooks" title="Jupyter Notebooks">
+        <tab type="user" url="../python-examples-explain" title="Use LLM to explain NEML2 input file in natural language"/>
+        <tab type="user" url="../python-examples-deterministic" title="Deterministic material model calibration"/>
+        <tab type="user" url="../python-examples-statistical" title="Statistical material model calibration"/>
+        <tab type="user" url="../python-examples-crystal_plasticity-compare_formulations" title="Crystal plasticity formulations"/>
+        <tab type="user" url="../python-examples-crystal_plasticity-polefigures" title="Plotting polefigures"/>
+      </tab>
       <tab type="user" url="../tutorials-next-steps" title="Next steps"/>
     </tab>
     <tab type="usergroup" title="Syntax Documentation">
       <tab type="user" url="../syntax-settings.html" title="[Settings]"/>
       <tab type="user" url="../syntax-tensors.html" title="[Tensors]"/>
       <tab type="user" url="../syntax-models.html" title="[Models]"/>
+      <tab type="user" url="../syntax-equationsystems.html" title="[EquationSystems]"/>
       <tab type="user" url="../syntax-solvers.html" title="[Solvers]"/>
       <tab type="user" url="../syntax-data.html" title="[Data]"/>
       <tab type="user" url="../syntax-drivers.html" title="[Drivers]"/>
@@ -57,18 +65,24 @@
       <tab type="user" url="../system-settings.html" title="Settings"/>
       <tab type="user" url="../system-tensors.html" title="Tensor"/>
       <tab type="user" url="../system-models.html" title="Model"/>
+      <tab type="user" url="../system-equationsystems.html" title="Equation System"/>
       <tab type="user" url="../system-solvers.html" title="Solver"/>
       <tab type="user" url="../system-data.html" title="Data"/>
       <tab type="user" url="../system-drivers.html" title="Driver"/>
       <tab type="user" url="../system-schedulers.html" title="Scheduler"/>
     </tab>
-    <tab type="usergroup" title="Physics Documentation">
+    <tab type="usergroup" title="Module Documentation">
       <tab type="user" url="../solid-mechanics.html" title="Solid Mechanics"/>
       <tab type="usergroup" url="../chemical-reactions.html" title="Chemical Reactions">
         <tab type="user" url="../thermosetting-pyrolysis.html" title="Thermosetting Pyrolysis"/>
         <tab type="user" url="../reactive-infiltration.html" title="Reactive Infiltration"/>
       </tab>
       <tab type="user" url="../phase-field-fracture.html" title="Phase-Field Fracture"/>
+      <tab type="user" url="../finite-volume.html" title="Finite Volume"/>
+    </tab>
+    <tab type="usergroup" title="Migration Guides">
+      <tab type="user" url="../migration-200-210.html" title="Migrating from v2.0.0 to v2.1.0"/>
+      <tab type="user" url="../migration-211-212.html" title="Migrating from v2.1.1 to v2.1.2"/>
     </tab>
     <tab type="topics" title="Aditional Documentation"/>
     <tab type="usergroup" title="C++ API Reference">

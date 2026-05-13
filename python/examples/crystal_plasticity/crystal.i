@@ -16,17 +16,17 @@
 [Data]
   [crystal_geometry]
     type = CubicCrystal
-    lattice_parameter = "a"
-    slip_directions = "sdirs"
-    slip_planes = "splanes"
+    lattice_parameter = 'a'
+    slip_directions = 'sdirs'
+    slip_planes = 'splanes'
   []
 []
 
 [Models]
   [euler_rodrigues]
     type = RotationMatrix
-    from = 'state/orientation'
-    to = 'state/orientation_matrix'
+    from = 'orientation'
+    to = 'orientation_matrix'
   []
   [elastic_tensor]
     type = CubicElasticityTensor
@@ -36,8 +36,7 @@
   [elasticity]
     type = GeneralElasticity
     elastic_stiffness_tensor = 'elastic_tensor'
-    strain = 'state/elastic_strain'
-    stress = 'state/internal/cauchy_stress'
+    strain = 'elastic_strain'
   []
   [resolved_shear]
     type = ResolvedShear
@@ -73,22 +72,29 @@
   []
   [integrate_slip_hardening]
     type = ScalarBackwardEulerTimeIntegration
-    variable = 'state/internal/slip_hardening'
+    variable = 'slip_hardening'
   []
   [integrate_elastic_strain]
     type = SR2BackwardEulerTimeIntegration
-    variable = 'state/elastic_strain'
+    variable = 'elastic_strain'
   []
   [integrate_orientation]
     type = WR2ImplicitExponentialTimeIntegration
-    variable = 'state/orientation'
+    variable = 'orientation'
   []
-
   [implicit_rate]
     type = ComposedModel
     models = "euler_rodrigues elasticity orientation_rate resolved_shear
               elastic_stretch plastic_deformation_rate plastic_spin
               sum_slip_rates slip_rule slip_strength voce_hardening
               integrate_slip_hardening integrate_elastic_strain integrate_orientation"
+  []
+[]
+
+[EquationSystems]
+  [eq_sys]
+    type = NonlinearSystem
+    model = 'implicit_rate'
+    unknowns = 'elastic_strain orientation slip_hardening'
   []
 []

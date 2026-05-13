@@ -1,0 +1,75 @@
+name: Deploy documentation
+
+on:
+  workflow_run:
+    workflows: ["Documentation"]
+    types: [completed]
+
+concurrency:
+  group: docs-deploy-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show upstream workflow information
+        run: |
+          echo "upstream workflow: ${{ github.event.workflow_run.name }}"
+          echo "upstream event:    ${{ github.event.workflow_run.event }}"
+          echo "upstream id:       ${{ github.event.workflow_run.id }}"
+          echo "upstream sha:      ${{ github.event.workflow_run.head_sha }}"
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: documentation
+          path: site/html
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage
+          path: site/html/coverage
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        if: github.event.workflow_run.event == 'pull_request'
+        with:
+          name: clang-tidy
+          path: site/html/clang-tidy
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # PR preview
+      - name: Deploy preview to GitHub Pages
+        if: github.event.workflow_run.event == 'pull_request'
+        uses: JamesIves/github-pages-deploy-action@v4.4.1
+        with:
+          branch: gh-pages
+          folder: site/html
+          target-folder: pr-preview/${{ github.event.workflow_run.pull_requests[0].number }}
+      - name: Update comment with preview link
+        if: github.event.workflow_run.event == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: doc-preview-link
+          number: ${{ github.event.workflow_run.pull_requests[0].number }}
+          message: |
+            Documentation preview: <https://applied-material-modeling.github.io/neml2/pr-preview/${{ github.event.workflow_run.pull_requests[0].number }}>
+            Code coverage: <https://applied-material-modeling.github.io/neml2/pr-preview/${{ github.event.workflow_run.pull_requests[0].number }}/coverage>
+            Static analysis: <https://applied-material-modeling.github.io/neml2/pr-preview/${{ github.event.workflow_run.pull_requests[0].number }}/clang-tidy>
+
+      # Deploy to GitHub Pages
+      - name: Deploy to GitHub Pages
+        if: github.event.workflow_run.event == 'push'
+        uses: JamesIves/github-pages-deploy-action@v4.4.1
+        with:
+          branch: gh-pages
+          folder: site/html
+          clean-exclude: pr-preview
+          single-commit: true

@@ -2,9 +2,9 @@
   [unit]
     type = ModelUnitTest
     model = 'model'
-    input_Scalar_names = 'state/internal/resolved_shears state/internal/slip_strengths forces/T'
+    input_Scalar_names = 'resolved_shears slip_strengths T'
     input_Scalar_values = 'tau tau_bar T'
-    output_Scalar_names = 'state/internal/slip_rates'
+    output_Scalar_names = 'slip_rates'
     output_Scalar_values = 'rates'
     check_AD_parameter_derivatives = false
     derivative_rel_tol = 0
@@ -38,13 +38,13 @@
   [gamma0_x]
     type = Scalar
     values = '300 400 500 600'
-    batch_shape = '(4,1)'
+    batch_shape = '(1,4)'
     intermediate_dimension = 2
   []
   [gamma0_y]
     type = Scalar
     values = '1e-3 1.5e-3 1.8e-3 2.1e-3'
-    batch_shape = '(4,1)'
+    batch_shape = '(1,4)'
     intermediate_dimension = 2
   []
   [rates]
@@ -60,10 +60,9 @@
 [Models]
   [gamma0_per_slip]
     type = ScalarLinearInterpolation
-    argument = 'forces/T'
+    argument = 'T'
     abscissa = 'gamma0_x'
     ordinate = 'gamma0_y'
-    dim = 0
   []
   [model0]
     type = PowerLawSlipRule

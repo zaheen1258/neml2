@@ -34,15 +34,14 @@ SlipStrengthMap::expected_options()
   OptionSet options = Model::expected_options();
   options.doc() = "Map between internal variables the slip system strengths.";
 
-  options.set_output("slip_strengths") = VariableName(STATE, "internal", "slip_strengths");
-  options.set("slip_strengths").doc() = "Name of the slip system strengths";
+  options.add_output("slip_strengths", "Name of the slip system strengths");
 
   return options;
 }
 
 SlipStrengthMap::SlipStrengthMap(const OptionSet & options)
   : Model(options),
-    _tau(declare_output_variable<Scalar>("slip_strengths", -1))
+    _tau(declare_output_variable<Scalar>("slip_strengths"))
 {
 }
 } // namespace neml2

@@ -41,8 +41,7 @@ FillSR2::expected_options()
                   "entries; when vector length is 6, the Scalar values are used to fill the tensor "
                   "following the Voigt notation.";
 
-  options.set<std::vector<TensorName<Scalar>>>("values");
-  options.set("values").doc() = "Scalars used to fill the SR2";
+  options.add<std::vector<TensorName<Scalar>>>("values", "Scalars used to fill the SR2");
 
   return options;
 }
@@ -57,7 +56,9 @@ SR2
 FillSR2::make() const
 {
   auto * f = factory();
-  neml_assert(f, "Internal error: factory == nullptr");
+  neml_assert(f,
+              "Internal error: factory is null while resolving tensor names. Ensure this user "
+              "tensor is created via the NEML2 factory.");
 
   if (_values.size() == 1)
     return SR2::fill(_values[0].resolve(f));

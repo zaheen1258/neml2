@@ -35,8 +35,7 @@ FillWR2::expected_options()
   OptionSet options = UserTensorBase::expected_options();
   options.doc() = "Construct a WR2 from a vector of Scalars.";
 
-  options.set<std::vector<TensorName<Scalar>>>("values");
-  options.set("values").doc() = "Scalars used to fill the WR2";
+  options.add<std::vector<TensorName<Scalar>>>("values", "Scalars used to fill the WR2");
 
   return options;
 }
@@ -55,7 +54,9 @@ WR2
 FillWR2::make() const
 {
   auto * f = factory();
-  neml_assert(f, "Internal error: factory == nullptr");
+  neml_assert(f,
+              "Internal error: factory is null while resolving tensor names. Ensure this user "
+              "tensor is created via the NEML2 factory.");
   return WR2::fill(_values[0].resolve(f), _values[1].resolve(f), _values[2].resolve(f));
 }
 } // namespace neml2

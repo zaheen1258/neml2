@@ -40,10 +40,11 @@
 
 [Drivers]
   [driver]
-    type = SDTSolidMechanicsDriver
+    type = TransientDriver
     model = 'model'
     prescribed_time = 'times'
-    prescribed_strain = 'strains'
+    force_SR2_names = 'E'
+    force_SR2_values = 'strains'
     save_as = 'result.pt'
   []
   [regression]
@@ -53,21 +54,16 @@
   []
 []
 
-[Solvers]
-  [newton]
-    type = Newton
-  []
-[]
-
 [Models]
   [mandel_stress]
     type = IsotropicMandelStress
+    cauchy_stress = 'stress'
   []
   [vonmises]
     type = SR2Invariant
     invariant_type = 'VONMISES'
-    tensor = 'state/internal/M'
-    invariant = 'state/internal/s'
+    tensor = 'mandel_stress'
+    invariant = 'effective_stress'
   []
   [isoharden]
     type = LinearIsotropicHardening
@@ -76,7 +72,7 @@
   [yield]
     type = YieldFunction
     yield_stress = 5
-    isotropic_hardening = 'state/internal/k'
+    isotropic_hardening = 'isotropic_hardening'
   []
   [flow]
     type = ComposedModel
@@ -85,9 +81,9 @@
   [normality]
     type = Normality
     model = 'flow'
-    function = 'state/internal/fp'
-    from = 'state/internal/M state/internal/k'
-    to = 'state/internal/NM state/internal/Nk'
+    function = 'yield_function'
+    from = 'mandel_stress isotropic_hardening'
+    to = 'flow_direction isotropic_hardening_direction'
   []
   [flow_rate]
     type = PerzynaPlasticFlowRate
@@ -102,14 +98,13 @@
   []
   [Erate]
     type = SR2VariableRate
-    variable = 'forces/E'
-    rate = 'forces/E_rate'
+    variable = 'E'
   []
   [Eerate]
     type = SR2LinearCombination
-    from_var = 'forces/E_rate state/internal/Ep_rate'
-    to_var = 'state/internal/Ee_rate'
-    coefficients = '1 -1'
+    from = 'E_rate plastic_strain_rate'
+    to = 'strain_rate'
+    weights = '1 -1'
   []
   [elasticity]
     type = LinearIsotropicElasticity
@@ -119,19 +114,47 @@
   []
   [integrate_stress]
     type = SR2BackwardEulerTimeIntegration
-    variable = 'state/S'
+    variable = 'stress'
   []
   [integrate_ep]
     type = ScalarBackwardEulerTimeIntegration
-    variable = 'state/internal/ep'
+    variable = 'equivalent_plastic_strain'
   []
   [implicit_rate]
     type = ComposedModel
     models = 'mandel_stress vonmises isoharden yield normality flow_rate Eprate eprate Erate Eerate elasticity integrate_stress integrate_ep'
   []
+[]
+
+[EquationSystems]
+  [eq_sys]
+    type = NonlinearSystem
+    model = 'implicit_rate'
+    unknowns = 'stress equivalent_plastic_strain'
+    residuals = 'stress_residual equivalent_plastic_strain_residual'
+  []
+[]
+
+[Solvers]
+  [newton]
+    type = Newton
+    linear_solver = 'lu'
+  []
+  [lu]
+    type = DenseLU
+  []
+[]
+
+[Models]
+  [predictor]
+    type = ConstantExtrapolationPredictor
+    unknowns_SR2 = 'stress'
+    unknowns_Scalar = 'equivalent_plastic_strain'
+  []
   [model]
     type = ImplicitUpdate
-    implicit_model = 'implicit_rate'
+    equation_system = 'eq_sys'
     solver = 'newton'
+    predictor = 'predictor'
   []
 []

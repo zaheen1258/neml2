@@ -26,7 +26,6 @@
 #include "neml2/tensors/functions/sqrt.h"
 #include "neml2/tensors/functions/clamp.h"
 #include "neml2/tensors/functions/where.h"
-#include "neml2/misc/assertions.h"
 
 namespace neml2
 {
@@ -38,15 +37,11 @@ CylindricalChannelGeometry::expected_options()
   OptionSet options = Model::expected_options();
   options.doc() = "Calculate the dimensionless inner and outer radii of the reaction product";
 
-  options.set_input("solid_fraction") = VariableName{"state", "phi_s"};
-  options.set("solid_fraction").doc() = "Volume fraction of the solid phase";
-  options.set_input("product_fraction") = VariableName{"state", "phi_p"};
-  options.set("product_fraction").doc() = "Volume fraction of the product phase";
+  options.add_input("solid_fraction", "Volume fraction of the solid phase");
+  options.add_input("product_fraction", "Volume fraction of the product phase");
 
-  options.set_output("inner_radius") = VariableName{"state", "ri"};
-  options.set("inner_radius").doc() = "Dimensionless inner radius of the product phase";
-  options.set_output("outer_radius") = VariableName{"state", "ro"};
-  options.set("outer_radius").doc() = "Dimensionless outer radius of the product phase";
+  options.add_output("inner_radius", "Dimensionless inner radius of the product phase");
+  options.add_output("outer_radius", "Dimensionless outer radius of the product phase");
 
   return options;
 }
@@ -61,12 +56,8 @@ CylindricalChannelGeometry::CylindricalChannelGeometry(const OptionSet & options
 }
 
 void
-CylindricalChannelGeometry::set_value(bool out, bool dout_din, bool d2out_din2)
+CylindricalChannelGeometry::set_value(bool out, bool dout_din, bool /*d2out_din2*/)
 {
-  neml_assert_dbg(!d2out_din2, "Second derivatives not implemented");
-  neml_assert_dbg(_phi_s.scalar_type() == _phi_p.scalar_type(),
-                  "Solid and product fractions must have the same scalar type");
-
   const auto eps = machine_precision(_phi_s.scalar_type());
   const auto cap = 1 - _phi_s - _phi_p;
   const auto ri = sqrt(clamp(cap, eps, 1.0 - eps));

@@ -55,18 +55,14 @@ CrystalGeometry::expected_options()
   options.doc() =
       "A Data object storing basic crystallographic information for a given crystal system.";
 
-  options.set_buffer<TensorName<R2>>("crystal_class");
-  options.set("crystal_class").doc() = "The set of symmetry operations defining the crystal class.";
-
-  options.set_buffer<TensorName<Vec>>("lattice_vectors");
-  options.set("lattice_vectors").doc() =
-      "The three lattice vectors defining the crystal translational symmetry";
-
-  options.set_buffer<TensorName<MillerIndex>>("slip_directions");
-  options.set("slip_directions").doc() = "A list of Miller indices defining the slip directions";
-
-  options.set_buffer<TensorName<MillerIndex>>("slip_planes");
-  options.set("slip_planes").doc() = "A list of Miller indices defining the slip planes";
+  options.add_buffer<R2>("crystal_class",
+                         "The set of symmetry operations defining the crystal class.");
+  options.add_buffer<Vec>("lattice_vectors",
+                          "The three lattice vectors defining the crystal translational symmetry");
+  options.add_buffer<MillerIndex>("slip_directions",
+                                  "A list of Miller indices defining the slip directions");
+  options.add_buffer<MillerIndex>("slip_planes",
+                                  "A list of Miller indices defining the slip planes");
 
   return options;
 }
@@ -173,7 +169,7 @@ CrystalGeometry::nslip_groups() const
 Size
 CrystalGeometry::nslip_in_group(Size i) const
 {
-  neml_assert_dbg(i < nslip_groups());
+  neml_assert_dbg(i < nslip_groups(), "Slip group index out of range");
   return _slip_offsets[i + 1] - _slip_offsets[i];
 }
 

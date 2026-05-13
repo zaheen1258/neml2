@@ -38,24 +38,22 @@ ComposedModel::expected_options()
       "treated as a new model and composed with others. The [system documentation](@ref "
       "model-composition) provides in-depth explanation on how the models are composed together.";
 
-  NonlinearSystem::enable_automatic_scaling(options);
+  options.add<std::vector<std::string>>("models", "Models being composed together");
 
-  options.set<std::vector<std::string>>("models");
-  options.set("models").doc() = "Models being composed together";
-
-  options.set<std::vector<VariableName>>("additional_outputs");
-  options.set("additional_outputs").doc() =
+  options.add<std::vector<VariableName>>(
+      "additional_outputs",
+      {},
       "Extra output variables to be extracted from the composed model in addition to the ones "
-      "identified through dependency resolution.";
+      "identified through dependency resolution.");
 
-  options.set<std::vector<std::string>>("priority");
-  options.set("priority").doc() =
+  options.add_optional<std::vector<std::string>>(
+      "priority",
       "Priorities of models in decreasing order. A model with higher priority will be evaluated "
-      "first. This is useful for breaking cyclic dependency.";
+      "first. This is useful for breaking cyclic dependency.");
 
-  options.set<bool>("automatic_nonlinear_parameter") = true;
-  options.set("automatic_nonlinear_parameter").doc() =
-      "Whether to automatically add dependent nonlinear parameters";
+  options.add<bool>("automatic_nonlinear_parameter",
+                    true,
+                    "Whether to automatically add dependent nonlinear parameters");
 
   return options;
 }
@@ -69,7 +67,7 @@ ComposedModel::ComposedModel(const OptionSet & options)
   // be registered as a sub-model by different models, and it could be evaluated with _different_
   // input, and hence yields _different_ output values.
   for (const auto & model_name : options.get<std::vector<std::string>>("models"))
-    register_model(model_name, /*nonlinear=*/false, /*merge_input=*/false);
+    register_model(model_name, /*merge_input=*/false);
 
   // Each sub-model may have nonlinear parameters. In our design, nonlinear parameters _are_
   // models. Since we do not want to put the burden of "adding nonlinear parameters in the input
@@ -78,7 +76,7 @@ ComposedModel::ComposedModel(const OptionSet & options)
   //
   // Registering nonlinear parameters here ensures dependency resolution. And if a nonlinear
   // parameter is registered by multiple models (which is very possible), we won't have to
-  // evaluate the nonlinar parameter over and over again!
+  // evaluate the nonlinear parameter over and over again!
   auto submodels = registered_models();
   if (_auto_nl_param)
     for (auto & submodel : submodels)
@@ -94,7 +92,9 @@ ComposedModel::ComposedModel(const OptionSet & options)
     _dependency.add_additional_outbound_item(var);
 
   // Define priority in the event of cyclic dependency
-  auto priority_order = options.get<std::vector<std::string>>("priority");
+  auto priority_order = options.defined("priority")
+                            ? options.get<std::vector<std::string>>("priority")
+                            : std::vector<std::string>{};
   size_t priority = priority_order.empty() ? 0 : priority_order.size() - 1;
   for (const auto & model_name : priority_order)
     _dependency.set_priority(registered_model(model_name).get(), priority--);
@@ -208,23 +208,21 @@ void
 ComposedModel::set_value(bool out, bool dout_din, bool d2out_din2)
 {
   for (const auto & i : registered_models())
-  {
-    if (out && !dout_din && !d2out_din2)
-      i->forward_maybe_jit(true, false, false);
-    else if (dout_din && !d2out_din2)
-      i->forward_maybe_jit(true, true, false);
-    else if (d2out_din2)
-      i->forward_maybe_jit(true, true, true);
-    else
-      throw NEMLException("Unsupported call signature to set_value");
-  }
+    i->forward_maybe_jit(out || dout_din || d2out_din2, dout_din || d2out_din2, d2out_din2);
 
   if (dout_din)
     for (auto && [name, var] : output_variables())
-      var->apply_chain_rule(_dependency);
+      for (const auto & [dy_dx, xvar] : var->direct_ref()->total_derivatives(_dependency))
+        var->d(input_variable(xvar->name())) = dy_dx;
 
   if (d2out_din2)
     for (auto && [name, var] : output_variables())
-      var->apply_second_order_chain_rule(_dependency);
+      for (const auto & [d2y_dx1x2, x1var, x2var] :
+           var->direct_ref()->total_second_derivatives(_dependency))
+        var->d2(input_variable(x1var->name()), input_variable(x2var->name())) = d2y_dx1x2;
+
+  if (dout_din || d2out_din2)
+    for (auto && [name, var] : output_variables())
+      var->direct_ref()->clear_chain_rule_cache(_dependency);
 }
 } // namespace neml2

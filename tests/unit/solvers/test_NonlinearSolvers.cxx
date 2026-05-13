@@ -23,78 +23,117 @@
 // THE SOFTWARE.
 
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/catch_template_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include "SampleNonlinearSystems.h"
-#include "neml2/solvers/Newton.h"
-#include "neml2/solvers/NewtonWithLineSearch.h"
-#include "neml2/solvers/NewtonWithTrustRegion.h"
+
+#include "neml2/equation_systems/AssembledVector.h"
+#include "neml2/neml2.h"
+#include "neml2/solvers/NonlinearSolver.h"
 
 using namespace neml2;
 
-using solver_types = std::tuple<Newton, NewtonWithLineSearch, NewtonWithTrustRegion>;
-
-TEMPLATE_LIST_TEST_CASE("NonlinearSolvers", "[solvers]", solver_types)
+TEST_CASE("NonlinearSolver", "[solvers]")
 {
   // System shape
   TensorShape batch_sz = {2};
-  Size nbase = 4;
+  Size n = 4;
 
-  // Create the nonlinear solver
-  OptionSet options = TestType::expected_options();
-  options.set<bool>("verbose") = false;
-  TestType solver(options);
+  // Create the solver
+  auto factory = load_input("solvers/solvers.i");
+  auto solver_name = GENERATE("newton", "newton_with_line_search");
 
-  SECTION("solve")
+  SECTION(solver_name)
   {
+    auto solver = factory->get_solver<NonlinearSolver>(solver_name);
+
     SECTION("power")
     {
-      // Initial guess
-      auto x = NonlinearSystem::Sol<false>(
-          Tensor::full(batch_sz, {}, nbase, 2.0, default_tensor_options()));
-
       // Create the nonlinear system
-      auto options = PowerTestSystem::expected_options();
-      PowerTestSystem system(options);
+      PowerTestSystem eq_sys(batch_sz, n);
+      eq_sys.init();
 
-      auto res = solver.solve(system, x);
+      // Initial guess
+      AssembledVector u0(eq_sys.ulayout(), {Tensor::full(batch_sz, {}, n, 2.0)});
+      eq_sys.set_u(u0);
 
+      // Solve
+      auto res = solver->solve(eq_sys);
       REQUIRE(res.ret == NonlinearSolver::RetCode::SUCCESS);
-      REQUIRE(at::allclose(res.solution, system.exact_solution(x)));
+
+      // Check solution
+      const auto sol = eq_sys.u();
+      const auto expected = eq_sys.exact_solution(u0);
+      REQUIRE(at::allclose(sol.tensors[0], expected.tensors[0]));
     }
 
     SECTION("Rosenbrock")
     {
-      // Initial guess
-      auto x = NonlinearSystem::Sol<false>(
-          Tensor::full(batch_sz, {}, nbase, 0.75, default_tensor_options()));
-
       // Create the nonlinear system
-      auto options = RosenbrockTestSystem::expected_options();
-      PowerTestSystem system(options);
+      RosenbrockTestSystem eq_sys(batch_sz, n);
+      eq_sys.init();
 
-      auto res = solver.solve(system, x);
+      // Initial guess
+      AssembledVector u0(eq_sys.ulayout(), {Tensor::full(batch_sz, {}, n, 0.75)});
+      eq_sys.set_u(u0);
 
+      // Solve
+      auto res = solver->solve(eq_sys);
       REQUIRE(res.ret == NonlinearSolver::RetCode::SUCCESS);
-      REQUIRE(at::allclose(res.solution, system.exact_solution(x)));
+
+      // Check solution
+      const auto sol = eq_sys.u();
+      const auto expected = eq_sys.exact_solution(u0);
+      REQUIRE(at::allclose(sol.tensors[0], expected.tensors[0]));
     }
   }
+}
 
-  SECTION("automatic scaling")
+TEST_CASE("NonlinearSolver/SchurComplement", "[solvers]")
+{
+  // System shape: 8 DOFs split into 2 groups of 5 and 3
+  // primary = {u_0, u_1, u_2, u_3, u_4},
+  // Schur = {u_5, u_6, u_7}
+  TensorShape batch_sz = {2};
+  Size n = 8;
+  std::vector<Size> group_sizes = {5, 3};
+
+  auto factory = load_input("solvers/solvers.i");
+  auto solver = factory->get_solver<NonlinearSolver>("newton_sc");
+
+  SECTION("power")
   {
-    // Initial guess
-    auto x = NonlinearSystem::Sol<false>(
-        Tensor::full(batch_sz, {}, nbase, 2.0, default_tensor_options()));
+    PowerTestSystem eq_sys(batch_sz, n, group_sizes, group_sizes);
+    eq_sys.init();
 
-    // Create the nonlinear system (with automatic scaling)
-    auto options = PowerTestSystem::expected_options();
-    options.set<bool>("automatic_scaling") = true;
-    PowerTestSystem system(options);
+    AssembledVector u0(eq_sys.ulayout(),
+                       {Tensor::full(batch_sz, {}, 5, 2.0), Tensor::full(batch_sz, {}, 3, 2.0)});
+    eq_sys.set_u(u0);
 
-    system.init_scaling(x, solver.verbose);
-    auto res = solver.solve(system, x);
-
+    auto res = solver->solve(eq_sys);
     REQUIRE(res.ret == NonlinearSolver::RetCode::SUCCESS);
-    REQUIRE(at::allclose(res.solution, system.exact_solution(x)));
+
+    const auto sol = eq_sys.u();
+    const auto expected = eq_sys.exact_solution(u0);
+    REQUIRE(at::allclose(sol.tensors[0], expected.tensors[0]));
+    REQUIRE(at::allclose(sol.tensors[1], expected.tensors[1]));
+  }
+
+  SECTION("Rosenbrock")
+  {
+    RosenbrockTestSystem eq_sys(batch_sz, n, group_sizes, group_sizes);
+    eq_sys.init();
+
+    AssembledVector u0(eq_sys.ulayout(),
+                       {Tensor::full(batch_sz, {}, 5, 0.75), Tensor::full(batch_sz, {}, 3, 0.75)});
+    eq_sys.set_u(u0);
+
+    auto res = solver->solve(eq_sys);
+    REQUIRE(res.ret == NonlinearSolver::RetCode::SUCCESS);
+
+    const auto sol = eq_sys.u();
+    const auto expected = eq_sys.exact_solution(u0);
+    REQUIRE(at::allclose(sol.tensors[0], expected.tensors[0]));
+    REQUIRE(at::allclose(sol.tensors[1], expected.tensors[1]));
   }
 }

@@ -19,15 +19,15 @@ t_n = Scalar.full(0.0)
 # This is when tracing takes place
 model.value(
     {
-        "state/a": a,
-        "state/b": b,
-        "state/c": c,
-        "forces/t": t,
-        "old_state/a": a_n,
-        "old_state/b": b,
-        "old_state/c": c,
-        "old_forces/t": t,
+        "a": a,
+        "b": b,
+        "c": c,
+        "t": t,
+        "a~1": a_n,
+        "b~1": b_n,
+        "c~1": c_n,
+        "t~1": t_n,
     }
 )
 
-print(torch.jit.last_executed_optimized_graph())
+print(torch.jit.last_executed_optimized_graph())  # type: ignore[attr-defined]

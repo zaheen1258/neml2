@@ -19,26 +19,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: psf/black@stable
+      - uses: actions/setup-python@v5
         with:
-          options: "--check -v"
-          src: "python/neml2 python/tests"
+          # dependencies: python.version_min
+          python-version: "3.9"
+      - name: Run black style check
+        uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: black --all-files
 
   test:
     needs: black
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        runner: [ubuntu-latest, macos-latest, gpu_runner]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: applied-material-modeling/neml2-ci@main
         with:
+          # dependencies: python.version_min
           python-version: 3.9
-          cmake-version: 3.26
+          # dependencies: cmake.version_min
+          cmake-version: 3.26.1
+          # dependencies: torch.version
           torch-version: 2.8.0
+          cpu-torch: ${{ matrix.runner != 'gpu_runner' }}
       - name: Install
-        run: CMAKE_GENERATOR=Ninja pip install -v .
+        run: pip install ".[dev]" -v
       - name: Run tests
         run: pytest -v --junitxml=pytest.xml python/tests
       - name: Test results

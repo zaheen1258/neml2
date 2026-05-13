@@ -3,7 +3,7 @@
     type = TransientDriver
     model = 'eq4'
     prescribed_time = 'times'
-    ic_Vec_names = 'state/x state/v'
+    ic_Vec_names = 'x v'
     ic_Vec_values = 'x0 v0'
     save_as = 'result.pt'
   []
@@ -45,20 +45,20 @@
 [Models]
   [eq2]
     type = ProjectileAcceleration
-    velocity = 'state/v'
-    acceleration = 'state/a'
+    velocity = 'v'
+    acceleration = 'a'
     gravitational_acceleration = 'g'
     dynamic_viscosity = 'mu'
   []
   [eq3a]
     type = VecBackwardEulerTimeIntegration
-    variable = 'state/x'
-    rate = 'state/v'
+    variable = 'x'
+    rate = 'v'
   []
   [eq3b]
     type = VecBackwardEulerTimeIntegration
-    variable = 'state/v'
-    rate = 'state/a'
+    variable = 'v'
+    rate = 'a'
   []
   [eq3]
     type = ComposedModel
@@ -68,10 +68,13 @@
     type = ComposedModel
     models = 'eq2 eq3'
   []
+[]
+
+[EquationSystems]
   [eq4]
-    type = ImplicitUpdate
-    implicit_model = 'system'
-    solver = 'newton'
+    type = NonlinearSystem
+    model = 'system'
+    unknowns = 'x v'
   []
 []
 
@@ -81,5 +84,17 @@
     rel_tol = 1e-08
     abs_tol = 1e-10
     max_its = 50
+    linear_solver = 'lu'
+  []
+  [lu]
+    type = DenseLU
+  []
+[]
+
+[Models]
+  [eq4]
+    type = ImplicitUpdate
+    equation_system = 'eq4'
+    solver = 'newton'
   []
 []

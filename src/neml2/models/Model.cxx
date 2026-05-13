@@ -26,26 +26,42 @@
 #include <torch/csrc/jit/frontend/tracer.h>
 
 #include "neml2/misc/assertions.h"
-#include "neml2/base/guards.h"
 #include "neml2/base/Factory.h"
 #include "neml2/base/Settings.h"
 #include "neml2/tensors/jit.h"
 #include "neml2/models/ParameterStore.h"
-#include "neml2/solvers/NonlinearSystem.h"
+#include "neml2/models/ModelNonlinearSystem.h"
 #include "neml2/tensors/functions/jacrev.h"
 #include "neml2/tensors/tensors.h"
 #include "neml2/tensors/TensorValue.h"
 #include "neml2/models/Model.h"
-#include "neml2/models/Assembler.h"
-#include "neml2/models/map_types_fwd.h"
 
 namespace neml2
 {
+
+bool &
+currently_assembling_nonlinear_system()
+{
+  thread_local static bool _assembling_nl_sys = false;
+  return _assembling_nl_sys;
+}
+
+AssemblyingNonlinearSystem::AssemblyingNonlinearSystem(bool assembling)
+  : prev_bool(currently_assembling_nonlinear_system())
+{
+  currently_assembling_nonlinear_system() = assembling;
+}
+
+AssemblyingNonlinearSystem::~AssemblyingNonlinearSystem()
+{
+  currently_assembling_nonlinear_system() = prev_bool;
+}
+
 bool
 Model::EvaluationSchema::operator==(const EvaluationSchema & other) const
 {
-  return dynamic_dims == other.dynamic_dims && intmd_shapes == other.intmd_shapes &&
-         dispatch_key == other.dispatch_key;
+  return device == other.device && dtype == other.dtype && dynamic_dims == other.dynamic_dims &&
+         intmd_shapes == other.intmd_shapes && dispatch_key == other.dispatch_key;
 }
 
 bool
@@ -57,6 +73,10 @@ Model::EvaluationSchema::operator!=(const EvaluationSchema & other) const
 bool
 Model::EvaluationSchema::operator<(const EvaluationSchema & other) const
 {
+  if (device != other.device)
+    return device.str() < other.device.str();
+  if (dtype != other.dtype)
+    return c10::toString(dtype) < c10::toString(other.dtype);
   if (dispatch_key != other.dispatch_key)
     return dispatch_key < other.dispatch_key;
   if (dynamic_dims != other.dynamic_dims)
@@ -68,33 +88,21 @@ OptionSet
 Model::expected_options()
 {
   OptionSet options = Data::expected_options();
-  options += NonlinearSystem::expected_options();
-  NonlinearSystem::disable_automatic_scaling(options);
 
   options.section() = "Models";
 
   // Model defaults to defining value and dvalue, but not d2value
-  options.set<bool>("define_values") = true;
-  options.set<bool>("define_derivatives") = true;
-  options.set<bool>("define_second_derivatives") = false;
-  options.set("define_values").suppressed() = true;
-  options.set("define_derivatives").suppressed() = true;
-  options.set("define_second_derivatives").suppressed() = true;
+  options.add_private<bool>("define_values", true);
+  options.add_private<bool>("define_derivatives", true);
+  options.add_private<bool>("define_second_derivatives", false);
 
-  // Model defaults to _not_ being part of a nonlinear system
-  // Model::get_model will set this to true if the model is expected to be part of a nonlinear
-  // system, and additional diagnostics will be performed
-  options.set<bool>("_nonlinear_system") = false;
-  options.set("_nonlinear_system").suppressed() = true;
-
-  options.set<bool>("jit") = true;
-  options.set("jit").doc() = "Use JIT compilation for the forward operator";
-
-  options.set<bool>("production") = false;
-  options.set("production").doc() =
+  options.add<bool>("jit", true, "Use JIT compilation for the forward operator");
+  options.add<bool>(
+      "production",
+      false,
       "Production mode. This option is used to disable features like function graph tracking and "
       "tensor version tracking which are useful for training (i.e., calibrating model parameters) "
-      "but are not necessary in production runs.";
+      "but are not necessary in production runs.");
 
   return options;
 }
@@ -103,12 +111,10 @@ Model::Model(const OptionSet & options)
   : Data(options),
     ParameterStore(this),
     VariableStore(this),
-    NonlinearSystem(options),
     DiagnosticsInterface(this),
     _defines_value(options.get<bool>("define_values")),
     _defines_dvalue(options.get<bool>("define_derivatives")),
     _defines_d2value(options.get<bool>("define_second_derivatives")),
-    _nonlinear_system(options.get<bool>("_nonlinear_system")),
     _jit(settings().disable_jit() ? false : options.get<bool>("jit")),
     _production(options.get<bool>("production"))
 {
@@ -146,116 +152,11 @@ Model::diagnose() const
   for (auto & submodel : registered_models())
     neml2::diagnose(*submodel);
 
-  // Make sure variables are defined on the reserved subaxes
-  for (auto && [name, var] : input_variables())
-    diagnostic_check_input_variable(*var);
-  for (auto && [name, var] : output_variables())
-    diagnostic_check_output_variable(*var);
-
-  if (is_nonlinear_system())
-    diagnose_nl_sys();
-
   if (settings().disable_jit())
     if (input_options().user_specified("jit"))
       diagnostic_assert(!input_options().get<bool>("jit"),
                         "JIT compilation is disabled globally by Settings/disable_jit=true, and it "
                         "is an error to explicitly set jit to true for any model.");
-}
-
-void
-Model::diagnose_nl_sys() const
-{
-  for (auto & submodel : registered_models())
-    submodel->diagnose_nl_sys();
-
-  // Check if any input variable is solve-dependent
-  bool input_solve_dep = false;
-  for (auto && [name, var] : input_variables())
-    if (var->is_solve_dependent())
-      input_solve_dep = true;
-
-  // If any input variable is solve-dependent, ALL output variables must be solve-dependent!
-  if (input_solve_dep)
-    for (auto && [name, var] : output_variables())
-      diagnostic_assert(
-          var->is_solve_dependent(),
-          "This model is part of a nonlinear system. At least one of the input variables is "
-          "solve-dependent, so all output variables MUST be solve-dependent, i.e., they must be "
-          "on one of the following sub-axes: state, residual, parameters. However, got output "
-          "variable ",
-          name);
-}
-
-void
-Model::diagnostic_assert_state(const VariableBase & v) const
-{
-  diagnostic_assert(v.is_state(), "Variable ", v.name(), " must be on the ", STATE, " sub-axis.");
-}
-
-void
-Model::diagnostic_assert_old_state(const VariableBase & v) const
-{
-  diagnostic_assert(
-      v.is_old_state(), "Variable ", v.name(), " must be on the ", OLD_STATE, " sub-axis.");
-}
-
-void
-Model::diagnostic_assert_force(const VariableBase & v) const
-{
-  diagnostic_assert(v.is_force(), "Variable ", v.name(), " must be on the ", FORCES, " sub-axis.");
-}
-
-void
-Model::diagnostic_assert_old_force(const VariableBase & v) const
-{
-  diagnostic_assert(
-      v.is_old_force(), "Variable ", v.name(), " must be on the ", OLD_FORCES, " sub-axis.");
-}
-
-void
-Model::diagnostic_assert_residual(const VariableBase & v) const
-{
-  diagnostic_assert(
-      v.is_residual(), "Variable ", v.name(), " must be on the ", RESIDUAL, " sub-axis.");
-}
-
-void
-Model::diagnostic_check_input_variable(const VariableBase & v) const
-{
-  diagnostic_assert(v.is_state() || v.is_old_state() || v.is_force() || v.is_old_force() ||
-                        v.is_residual() || v.is_parameter(),
-                    "Input variable ",
-                    v.name(),
-                    " must be on one of the following sub-axes: ",
-                    STATE,
-                    ", ",
-                    OLD_STATE,
-                    ", ",
-                    FORCES,
-                    ", ",
-                    OLD_FORCES,
-                    ", ",
-                    RESIDUAL,
-                    ", ",
-                    PARAMETERS,
-                    ".");
-}
-
-void
-Model::diagnostic_check_output_variable(const VariableBase & v) const
-{
-  diagnostic_assert(v.is_state() || v.is_force() || v.is_residual() || v.is_parameter(),
-                    "Output variable ",
-                    v.name(),
-                    " must be on one of the following sub-axes: ",
-                    STATE,
-                    ", ",
-                    FORCES,
-                    ", ",
-                    RESIDUAL,
-                    ", ",
-                    PARAMETERS,
-                    ".");
 }
 
 void
@@ -272,7 +173,7 @@ void
 Model::link_input_variables(Model * submodel)
 {
   for (auto && [name, var] : submodel->input_variables())
-    var->ref(input_variable(name), submodel->is_nonlinear_system());
+    var->ref(input_variable(name));
 }
 
 void
@@ -288,6 +189,13 @@ Model::link_output_variables()
 void
 Model::link_output_variables(Model * /*submodel*/)
 {
+}
+
+std::string
+Model::failed_graph_execution_hint() const
+{
+  return "Try turning off just-in-time (JIT) compilation to get more detailed error messages. This "
+         "can be done by setting 'Settings/disable_jit=true'.";
 }
 
 void
@@ -360,7 +268,11 @@ Model::calculate_eval_schema() const
 
   const auto dispatch_key = variable_options().computeDispatchKey();
 
-  return EvaluationSchema{dynamic_dims, intmd_shapes, dispatch_key};
+  return EvaluationSchema{variable_options().device(),
+                          at::typeMetaToScalarType(variable_options().dtype()),
+                          dynamic_dims,
+                          intmd_shapes,
+                          dispatch_key};
 }
 
 std::size_t
@@ -409,6 +321,9 @@ Model::forward(bool out, bool dout, bool d2out)
 void
 Model::forward_maybe_jit(bool out, bool dout, bool d2out)
 {
+  if (!out && !dout && !d2out)
+    return;
+
   if (!is_jit_enabled() || jit::tracer::isTracing())
   {
     forward(out, dout, d2out);
@@ -416,7 +331,7 @@ Model::forward_maybe_jit(bool out, bool dout, bool d2out)
   }
 
   auto & traced_functions =
-      currently_solving_nonlinear_system() ? _traced_functions_nl_sys : _traced_functions;
+      currently_assembling_nonlinear_system() ? _traced_functions_nl_sys : _traced_functions;
 
   const auto forward_op_idx = forward_operator_index(out, dout, d2out);
   const auto schema = calculate_eval_schema();
@@ -427,7 +342,15 @@ Model::forward_maybe_jit(bool out, bool dout, bool d2out)
     auto & [schema, traced_function] = *traced_schema_and_function;
     c10::InferenceMode mode_guard(_production);
     auto stack = collect_input_stack();
-    traced_function->run(stack);
+    try
+    {
+      traced_function->run(stack);
+    }
+    catch (const std::exception & e)
+    {
+      throw NEMLException("Failed to run traced model '" + name() + "': \n" + e.what() + "\n" +
+                          failed_graph_execution_hint());
+    }
     if (dout || d2out)
       clear_derivatives();
     assign_output_stack(stack, out, dout, d2out);
@@ -528,6 +451,17 @@ Model::value(const ValueMap & in)
   return values;
 }
 
+DerivMap
+Model::dvalue(const ValueMap & in)
+{
+  forward_helper(in, false, true, false);
+
+  auto derivs = collect_output_derivatives();
+  clear_input();
+  clear_output();
+  return derivs;
+}
+
 std::tuple<ValueMap, DerivMap>
 Model::value_and_dvalue(const ValueMap & in)
 {
@@ -540,51 +474,29 @@ Model::value_and_dvalue(const ValueMap & in)
   return {values, derivs};
 }
 
-DerivMap
-Model::dvalue(const ValueMap & in)
+void
+Model::set_output_derivative_filter(
+    const std::vector<std::pair<VariableName, VariableName>> & derivs)
 {
-  forward_helper(in, false, true, false);
+  // Stores the filter and resets _deriv_sparsity (not nl_sys — those are independent).
+  VariableStore::set_output_derivative_filter(derivs);
 
-  auto derivs = collect_output_derivatives();
-  clear_input();
-  clear_output();
-  return derivs;
+  // Invalidate only the regular traced graphs for dout=true indices (2, 3, 6, 7).
+  // The nl_sys graphs are independent and are not affected by this filter.
+  for (const std::size_t idx : {2ul, 3ul, 6ul, 7ul})
+    _traced_functions[idx].clear();
 }
 
-std::tuple<ValueMap, DerivMap, SecDerivMap>
-Model::value_and_dvalue_and_d2value(const ValueMap & in)
+void
+Model::set_output_derivative_filter_nl_sys(
+    const std::vector<std::pair<VariableName, VariableName>> & derivs)
 {
-  forward_helper(in, true, true, true);
+  // Stores the nl_sys filter and resets _deriv_sparsity_nl_sys.
+  VariableStore::set_output_derivative_filter_nl_sys(derivs);
 
-  const auto values = collect_output();
-  const auto derivs = collect_output_derivatives();
-  const auto secderivs = collect_output_second_derivatives();
-  clear_input();
-  clear_output();
-  return {values, derivs, secderivs};
-}
-
-std::tuple<DerivMap, SecDerivMap>
-Model::dvalue_and_d2value(const ValueMap & in)
-{
-  forward_helper(in, false, true, true);
-
-  const auto derivs = collect_output_derivatives();
-  const auto secderivs = collect_output_second_derivatives();
-  clear_input();
-  clear_output();
-  return {derivs, secderivs};
-}
-
-SecDerivMap
-Model::d2value(const ValueMap & in)
-{
-  forward_helper(in, false, false, true);
-
-  auto secderivs = collect_output_second_derivatives();
-  clear_input();
-  clear_output();
-  return secderivs;
+  // Invalidate only the nl_sys traced graphs for dout=true indices (2, 3, 6, 7).
+  for (const std::size_t idx : {2ul, 3ul, 6ul, 7ul})
+    _traced_functions_nl_sys[idx].clear();
 }
 
 std::shared_ptr<Model>
@@ -697,32 +609,6 @@ Model::collect_input_stack() const
 }
 
 void
-Model::set_guess(const Sol<false> & x)
-{
-  const auto sol_assember = VectorAssembler(input_axis().subaxis(STATE));
-  assign_input(sol_assember.split_by_variable(x), /*assembly=*/true);
-}
-
-void
-Model::assemble(NonlinearSystem::Res<false> * residual, NonlinearSystem::Jac<false> * Jacobian)
-{
-  forward_maybe_jit(residual, Jacobian, false);
-
-  if (residual)
-  {
-    const auto res_assembler = VectorAssembler(output_axis().subaxis(RESIDUAL));
-    *residual = Res<false>(res_assembler.assemble_by_variable(collect_output(/*assembly=*/true)));
-  }
-  if (Jacobian)
-  {
-    const auto jac_assembler =
-        MatrixAssembler(output_axis().subaxis(RESIDUAL), input_axis().subaxis(STATE));
-    *Jacobian = Jac<false>(
-        jac_assembler.assemble_by_variable(collect_output_derivatives(/*assembly=*/true)));
-  }
-}
-
-void
 Model::enable_AD()
 {
   for (auto * ad_arg : _ad_args)
@@ -743,16 +629,14 @@ Model::extract_AD_derivatives(bool dout, bool d2out)
     // Gather all dependent variables
     std::vector<Tensor> uts;
     for (const auto * u : us)
-      if (u->is_dependent())
-        uts.push_back(u->tensor());
+      uts.push_back(u->tensor());
 
     // Check if we need to create the graph (i.e., if any of the second derivatives are requested)
     bool create_graph = false;
     for (const auto * u : us)
-      if (u->is_dependent())
-        if (!create_graph && !dout && d2out)
-          if (_ad_secderivs.at(y).count(u))
-            create_graph = true;
+      if (!create_graph && !dout && d2out)
+        if (_ad_secderivs.at(y).count(u))
+          create_graph = true;
 
     const auto dy_dus = jacrev(y->tensor(),
                                uts,
@@ -762,12 +646,11 @@ Model::extract_AD_derivatives(bool dout, bool d2out)
 
     std::size_t i = 0;
     for (const auto * u : us)
-      if (u->is_dependent())
-      {
-        if (dy_dus[i].defined())
-          y->d(*u) = dy_dus[i];
-        i++;
-      }
+    {
+      if (dy_dus[i].defined())
+        y->d(*u) = dy_dus[i];
+      i++;
+    }
   }
 
   if (d2out)
@@ -775,9 +658,6 @@ Model::extract_AD_derivatives(bool dout, bool d2out)
     for (auto && [y, u1u2s] : _ad_secderivs)
       for (auto && [u1, u2s] : u1u2s)
       {
-        if (!u1->is_dependent())
-          continue;
-
         const auto & dy_du1 = y->d(*u1).tensor();
 
         if (!dy_du1.defined() || !dy_du1.requires_grad())
@@ -785,8 +665,7 @@ Model::extract_AD_derivatives(bool dout, bool d2out)
 
         std::vector<Tensor> u2ts;
         for (const auto * u2 : u2s)
-          if (u2->is_dependent())
-            u2ts.push_back(u2->tensor());
+          u2ts.push_back(u2->tensor());
 
         const auto d2y_du1u2s = jacrev(dy_du1,
                                        u2ts,
@@ -796,12 +675,11 @@ Model::extract_AD_derivatives(bool dout, bool d2out)
 
         std::size_t i = 0;
         for (const auto * u2 : u2s)
-          if (u2->is_dependent())
-          {
-            if (d2y_du1u2s[i].defined())
-              y->d2(*u1, *u2) = d2y_du1u2s[i];
-            i++;
-          }
+        {
+          if (d2y_du1u2s[i].defined())
+            y->d2(*u1, *u2) = d2y_du1u2s[i];
+          i++;
+        }
       }
   }
 }
@@ -839,11 +717,17 @@ operator<<(std::ostream & os, const Model & model)
     }
   }
 
-  if (!model.named_parameters().empty())
+  if (model.host() != &model)
+  {
+    os << "Host:       " << model.host()->name() << '\n';
+  }
+
+  const auto * pstore = model.host<ParameterStore>();
+  if (!pstore->named_parameters().empty())
   {
     os << "Parameters: ";
     first = true;
-    for (auto && [name, param] : model.named_parameters())
+    for (auto && [name, param] : pstore->named_parameters())
     {
       os << (first ? "" : tab);
       os << name << " [" << param->type() << "][" << Tensor(*param).scalar_type() << "]["
@@ -852,11 +736,12 @@ operator<<(std::ostream & os, const Model & model)
     }
   }
 
-  if (!model.named_buffers().empty())
+  const auto * bstore = model.host<BufferStore>();
+  if (!bstore->named_buffers().empty())
   {
     os << "Buffers:    ";
     first = true;
-    for (auto && [name, buffer] : model.named_buffers())
+    for (auto && [name, buffer] : bstore->named_buffers())
     {
       os << (first ? "" : tab);
       os << name << " [" << buffer->type() << "][" << Tensor(*buffer).scalar_type() << "]["

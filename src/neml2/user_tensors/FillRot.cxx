@@ -36,11 +36,9 @@ FillRot::expected_options()
   OptionSet options = UserTensorBase<Rot>::expected_options();
   options.doc() = "Construct a Rot from a vector of Scalars.";
 
-  options.set<std::vector<TensorName<Scalar>>>("values");
-  options.set("values").doc() = "Scalars used to fill the Rot";
-
-  options.set<std::string>("method") = "modified";
-  options.set("method").doc() = "Fill method, options are 'modified' and 'standard'.";
+  options.add<std::vector<TensorName<Scalar>>>("values", "Scalars used to fill the Rot");
+  options.add<std::string>(
+      "method", "modified", "Fill method, options are 'modified' and 'standard'.");
 
   return options;
 }
@@ -56,7 +54,9 @@ Rot
 FillRot::make() const
 {
   auto * f = factory();
-  neml_assert(f, "Internal error: factory == nullptr");
+  neml_assert(f,
+              "Internal error: factory is null while resolving tensor names. Ensure this user "
+              "tensor is created via the NEML2 factory.");
 
   if (_method == "modified")
   {

@@ -25,6 +25,7 @@
 #pragma once
 
 #include <c10/util/ArrayRef.h>
+#include <c10/util/OptionalArrayRef.h>
 #include <c10/core/TensorOptions.h>
 #include <c10/core/Scalar.h>
 
@@ -60,6 +61,8 @@ template <typename T, unsigned N>
 using SmallVector = c10::SmallVector<T, N>;
 template <typename T>
 using ArrayRef = c10::ArrayRef<T>;
+template <typename T>
+using OptionalArrayRef = c10::OptionalArrayRef<T>;
 using TensorOptions = c10::TensorOptions;
 using Dtype = c10::ScalarType;
 using DeviceIndex = c10::DeviceIndex;
@@ -68,6 +71,8 @@ using Device = c10::Device;
 using Size = int64_t;
 using TensorShape = c10::SmallVector<Size, 8>;
 using TensorShapeRef = c10::ArrayRef<Size>;
+
+using VariableName = std::string;
 
 // Machine precision depending on the dtype
 double machine_precision(Dtype);

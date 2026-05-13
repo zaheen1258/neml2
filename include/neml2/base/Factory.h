@@ -24,9 +24,6 @@
 
 #pragma once
 
-#include <filesystem>
-#include <iostream>
-
 #include "neml2/misc/errors.h"
 #include "neml2/base/InputFile.h"
 
@@ -36,6 +33,7 @@ namespace neml2
 class Settings;
 class Factory;
 class NEML2Object;
+class EquationSystem;
 class Solver;
 class Data;
 class Model;
@@ -86,6 +84,9 @@ public:
                                 const OptionSet & additional_options = OptionSet(),
                                 bool force_create = true);
 
+  /// Get an equation system by its name
+  template <class T = EquationSystem>
+  std::shared_ptr<T> get_es(const std::string & name);
   /// Get a solver by its name
   template <class T = Solver>
   std::shared_ptr<T> get_solver(const std::string & name);
@@ -110,7 +111,7 @@ public:
    *
    * @param os The stream to write to.
    */
-  void print(std::ostream & os = std::cout);
+  void print(std::ostream & os) const;
 
 protected:
   /**
@@ -169,8 +170,8 @@ Factory::get_object(const std::string & section,
     if (options.first == name)
     {
       auto new_options = options.second;
-      new_options.set<Factory *>("_factory") = this;
-      new_options.set<std::shared_ptr<Settings>>("_settings") = settings();
+      new_options.set_private<Factory *>("_factory", this);
+      new_options.set_private<std::shared_ptr<Settings>>("_settings", settings());
       new_options += additional_options;
       create_object(section, new_options);
       break;
@@ -183,9 +184,17 @@ Factory::get_object(const std::string & section,
   auto obj = std::dynamic_pointer_cast<T>(_objects[section][name].back());
 
   if (!obj)
-    throw FactoryException("Internal error: Factory failed to create object " + name);
+    throw FactoryException("Found object named " + name + " under section " + section +
+                           ". But dynamic cast failed. Did you specify the correct object type?");
 
   return obj;
+}
+
+template <class T>
+std::shared_ptr<T>
+Factory::get_es(const std::string & name)
+{
+  return get_object<T>("EquationSystems", name);
 }
 
 template <class T>

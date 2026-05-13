@@ -24,41 +24,86 @@
 
 #pragma once
 
-#include "neml2/solvers/NonlinearSystem.h"
+#include "neml2/equation_systems/NonlinearSystem.h"
+#include "neml2/equation_systems/AssembledVector.h"
+#include "neml2/equation_systems/AssembledMatrix.h"
 
 namespace neml2
 {
 class TestNonlinearSystem : public NonlinearSystem
 {
 public:
-  TestNonlinearSystem(const OptionSet & options);
+  /// @param B Batch shape for the system's tensors.
+  /// @param n Total number of DOFs.
+  /// @param residual_group_sizes Number of DOFs in each residual group.  When empty
+  ///        (the default) all DOFs are placed in a single group.
+  /// @param unknown_group_sizes Number of DOFs in each unknown group.  When empty
+  ///        (the default) all DOFs are placed in a single group.
+  TestNonlinearSystem(TensorShape B,
+                      Size n,
+                      std::vector<Size> residual_group_sizes = {},
+                      std::vector<Size> unknown_group_sizes = {});
 
-  void set_guess(const Sol<false> & x) override;
-  virtual Tensor exact_solution(const Sol<false> & x) const = 0;
+  void set_u(const AssembledVector & u) override { _u = u; }
+  void set_g(const AssembledVector & /*g*/) override {}
+
+  AssembledVector u() const override { return _u; }
+  AssembledVector g() const override { return {}; }
+
+  virtual AssembledVector exact_solution(const AssembledVector & u) const = 0;
 
 protected:
-  Tensor _x;
+  void assemble(AssembledMatrix *, AssembledMatrix *, AssembledVector *) override;
+
+  std::shared_ptr<AxisLayout> setup_ulayout() override;
+  std::shared_ptr<AxisLayout> setup_glayout() override;
+  std::shared_ptr<AxisLayout> setup_blayout() override;
+
+  /// residual for DOF i
+  virtual Scalar residual() const = 0;
+  /// Jacobian for DOF i w.r.t. DOF j
+  virtual Scalar jacobian() const = 0;
+
+  /// DOF index
+  Size _i = 0, _j = 0;
+  /// group index
+  std::size_t _I = 0, _J = 0;
+
+  /// Batch shape
+  const TensorShape _B;
+  /// Number of DOFs in the system.
+  const Size _n;
+  /// DOFs per residual group (always at least one entry)
+  const std::vector<Size> _residual_group_sizes;
+  /// DOFs per unknown group (always at least one entry)
+  const std::vector<Size> _unknown_group_sizes;
+  /// Current solution vector.
+  AssembledVector _u;
 };
 
 class PowerTestSystem : public TestNonlinearSystem
 {
 public:
-  PowerTestSystem(const OptionSet & options);
-
-  Tensor exact_solution(const Sol<false> & x) const override;
+  using TestNonlinearSystem::TestNonlinearSystem;
+  AssembledVector exact_solution(const AssembledVector &) const override;
 
 protected:
-  void assemble(Res<false> *, Jac<false> *) override;
+  /// residual for DOF i
+  Scalar residual() const override;
+  /// Jacobian for DOF i w.r.t. DOF j
+  Scalar jacobian() const override;
 };
 
 class RosenbrockTestSystem : public TestNonlinearSystem
 {
 public:
-  RosenbrockTestSystem(const neml2::OptionSet & options);
-
-  neml2::Tensor exact_solution(const Sol<false> & x) const override;
+  using TestNonlinearSystem::TestNonlinearSystem;
+  AssembledVector exact_solution(const AssembledVector &) const override;
 
 protected:
-  void assemble(Res<false> *, Jac<false> *) override;
+  /// residual for DOF i
+  Scalar residual() const override;
+  /// Jacobian for DOF i w.r.t. DOF j
+  Scalar jacobian() const override;
 };
 }

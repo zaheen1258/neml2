@@ -30,20 +30,39 @@
 #include "neml2/models/Data.h"
 #include "neml2/models/ParameterStore.h"
 #include "neml2/models/VariableStore.h"
-#include "neml2/solvers/NonlinearSystem.h"
 #include "neml2/models/NonlinearParameter.h"
 #include "neml2/tensors/jit.h"
 
 // These headers are not directly used by Model, but are included here so that derived classes do
 // not have to include them separately. This is a convenience for the user, and is a reasonable
 // choice since these headers are light and bring in little dependency.
-#include "neml2/base/LabeledAxis.h"
 #include "neml2/models/Variable.h"
-#include "neml2/models/Derivative.h"
+#include "neml2/tensors/Derivative.h"
 
 namespace neml2
 {
 class Model;
+
+/**
+ * During the solve of the nonlinear system, we only need derivatives with respect to the unknowns,
+ * not w.r.t. the given variables. Therefore, the model can/should avoid unnecessary computations by
+ * examining whether the current evaluation is part of the assembly process.
+ */
+bool & currently_assembling_nonlinear_system();
+
+// Guard a region where implicit solve is being performed
+struct AssemblyingNonlinearSystem
+{
+  AssemblyingNonlinearSystem(bool assembling = true);
+
+  AssemblyingNonlinearSystem(const AssemblyingNonlinearSystem &) = delete;
+  AssemblyingNonlinearSystem(AssemblyingNonlinearSystem &&) = delete;
+  AssemblyingNonlinearSystem & operator=(const AssemblyingNonlinearSystem &) = delete;
+  AssemblyingNonlinearSystem & operator=(AssemblyingNonlinearSystem &&) = delete;
+  ~AssemblyingNonlinearSystem();
+
+  const bool prev_bool;
+};
 
 /**
  * @brief The base class for all constitutive models.
@@ -58,7 +77,6 @@ class Model : public std::enable_shared_from_this<Model>,
               public Data,
               public ParameterStore,
               public VariableStore,
-              public NonlinearSystem,
               public DependencyDefinition<VariableName>,
               public DiagnosticsInterface
 {
@@ -70,6 +88,8 @@ public:
    */
   struct EvaluationSchema
   {
+    Device device;
+    Dtype dtype;
     std::vector<Size> dynamic_dims;
     std::vector<TensorShape> intmd_shapes;
     at::DispatchKey dispatch_key;
@@ -99,9 +119,6 @@ public:
 
   /// Whether this model defines second derivatives
   virtual bool defines_second_derivatives() const { return _defines_d2value; }
-
-  /// Whether this model defines one or more nonlinear equations to be solved
-  virtual bool is_nonlinear_system() const { return _nonlinear_system; }
 
   /// Whether JIT is enabled
   virtual bool is_jit_enabled() const { return _jit; }
@@ -166,21 +183,16 @@ public:
   /// Convenient shortcut to construct and return the model value
   virtual ValueMap value(const ValueMap & in);
 
-  /// Convenient shortcut to construct and return the model value and its derivative
-  virtual std::tuple<ValueMap, DerivMap> value_and_dvalue(const ValueMap & in);
-
   /// Convenient shortcut to construct and return the derivative
   virtual DerivMap dvalue(const ValueMap & in);
 
-  /// Convenient shortcut to construct and return the model's value, first and second derivative
-  virtual std::tuple<ValueMap, DerivMap, SecDerivMap>
-  value_and_dvalue_and_d2value(const ValueMap & in);
+  /// Convenient shortcut to construct and return the model value and its derivative
+  virtual std::tuple<ValueMap, DerivMap> value_and_dvalue(const ValueMap & in);
 
-  /// Convenient shortcut to construct and return the model's second derivative
-  virtual SecDerivMap d2value(const ValueMap & in);
-
-  /// Convenient shortcut to construct and return the model's first and second derivative
-  virtual std::tuple<DerivMap, SecDerivMap> dvalue_and_d2value(const ValueMap & in);
+  /// Set the (output, input) pairs whose derivatives should be computed and returned by dvalue and
+  /// value_and_dvalue. Pass an empty vector to clear the filter and compute all derivatives.
+  void
+  set_output_derivative_filter(const std::vector<std::pair<VariableName, VariableName>> & derivs);
 
   /// Declaration of nonlinear parameters may require manipulation of input
   friend class ParameterStore;
@@ -188,17 +200,17 @@ public:
   /// ComposedModel's set_value need to call submodel's set_value
   friend class ComposedModel;
 
-protected:
-  void diagnostic_assert_state(const VariableBase & v) const;
-  void diagnostic_assert_old_state(const VariableBase & v) const;
-  void diagnostic_assert_force(const VariableBase & v) const;
-  void diagnostic_assert_old_force(const VariableBase & v) const;
-  void diagnostic_assert_residual(const VariableBase & v) const;
-  void diagnostic_check_input_variable(const VariableBase & v) const;
-  void diagnostic_check_output_variable(const VariableBase & v) const;
+  /// ModelNonlinearSystem needs access to some setup methods
+  friend class ModelNonlinearSystem;
 
-  /// Additional diagnostics for a nonlinear system
-  void diagnose_nl_sys() const;
+  /// ImplicitUpdate sets the nl_sys derivative filter on its sub-model at construction time
+  friend class ImplicitUpdate;
+
+protected:
+  /// Same as set_output_derivative_filter but applies only during nonlinear system assembly.
+  /// Only invalidates the nl_sys JIT graph cache; the regular graph cache is untouched.
+  void set_output_derivative_filter_nl_sys(
+      const std::vector<std::pair<VariableName, VariableName>> & derivs);
 
   virtual void link_input_variables();
   virtual void link_input_variables(Model * submodel);
@@ -207,6 +219,9 @@ protected:
 
   /// Check the current default precision and warn if it's not double precision
   void check_precision() const;
+
+  /// Additional hint to include in the error message when an exception is encountered during execution of the traced graph
+  virtual std::string failed_graph_execution_hint() const;
 
   /**
    * Request the use of automatic differentiation to compute variable derivatives
@@ -236,13 +251,12 @@ protected:
    * model, which will affect dependency resolution inside a ComposedModel.
    *
    * @param name The model to register
-   * @param nonlinear Set to true if the registered model defines a nonlinear system to be solved
    * @param merge_input Whether to merge the input axis of the registered model into *this* model's
    * input axis. This will make sure that the input variables of the registered model are "ready" by
    * the time *this* model is evaluated.
    */
   template <typename T = Model, typename = typename std::enable_if_t<std::is_base_of_v<Model, T>>>
-  T & register_model(const std::string & name, bool nonlinear = false, bool merge_input = true)
+  T & register_model(const std::string & name, bool merge_input = true)
   {
     auto model_name =
         input_options().contains(name) ? input_options().get<std::string>(name) : name;
@@ -251,32 +265,46 @@ protected:
                            "' is trying to register itself as a sub-model. This is not allowed.");
 
     OptionSet extra_opts;
-    extra_opts.set<NEML2Object *>("_host") = host();
-    extra_opts.set<bool>("_nonlinear_system") = nonlinear;
+    extra_opts.add_private<NEML2Object *>("_host", host());
 
     if (!host()->factory())
       throw SetupException("Internal error: Host object '" + host()->name() +
                            "' does not have a factory set.");
     auto model = host()->factory()->get_object<T>("Models", model_name, extra_opts);
+
+    register_model(model, merge_input);
+    return *model;
+  }
+
+  /**
+   * @brief Register a model that the current model may use during its evaluation.
+   *
+   * If \p merge_input is set to true, this model will also *consume* the consumed variables of \p
+   * model, which will affect dependency resolution inside a ComposedModel.
+   *
+   * @param model The model to register
+   * @param merge_input Whether to merge the input axis of the registered model into *this* model's
+   * input axis. This will make sure that the input variables of the registered model are "ready" by
+   * the time *this* model is evaluated.
+   */
+  template <typename T = Model, typename = typename std::enable_if_t<std::is_base_of_v<Model, T>>>
+  void register_model(const std::shared_ptr<T> & model, bool merge_input = true)
+  {
     if (std::find(_registered_models.begin(), _registered_models.end(), model) !=
         _registered_models.end())
-      throw SetupException("Model named '" + model_name + "' has already been registered.");
+      throw SetupException("Model named '" + model->name() + "' has already been registered.");
 
     if (merge_input)
       for (auto && [name, var] : model->input_variables())
-        clone_input_variable(*var);
+        if (input_variables().find(name) == input_variables().end())
+          clone_input_variable(*var);
 
     _registered_models.push_back(model);
-    return *model;
   }
 
   void assign_input_stack(jit::Stack & stack);
 
   jit::Stack collect_input_stack() const;
-
-  void set_guess(const Sol<false> &) override;
-
-  void assemble(Res<false> *, Jac<false> *) override;
 
   /// Models *this* model may use during its evaluation
   std::vector<std::shared_ptr<Model>> _registered_models;
@@ -309,9 +337,6 @@ private:
   bool _defines_dvalue;
   bool _defines_d2value;
   ///@}
-
-  /// Whether this is a nonlinear system
-  bool _nonlinear_system;
 
   /// Parameters whose values are provided by another model
   std::map<std::string, NonlinearParameter> _nl_params;
@@ -351,6 +376,9 @@ private:
   /// Similar to _trace_functions, but for the forward operator of the nonlinear system
   std::array<std::map<EvaluationSchema, std::unique_ptr<jit::GraphFunction>>, 8>
       _traced_functions_nl_sys;
+
+  /// Whether we are currently assembling a nonlinear system
+  bool _currently_assembling_nonlinear_system = false;
 };
 
 std::ostream & operator<<(std::ostream & os, const Model & model);

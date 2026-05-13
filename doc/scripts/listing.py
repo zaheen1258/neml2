@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 import re
 from typing import Union
+from loguru import logger
 
 
 def git_fuzzy_find_file(filename: str) -> Path:
@@ -43,7 +44,7 @@ def git_fuzzy_find_file(filename: str) -> Path:
     import subprocess
 
     try:
-        root = Path(__file__).parent.parent
+        root = Path(__file__).parent.parent.parent  # repo root
         result = subprocess.run(
             ["git", "ls-files", "*{}".format(filename)],
             capture_output=True,
@@ -53,35 +54,35 @@ def git_fuzzy_find_file(filename: str) -> Path:
         )
         files = result.stdout.strip().split("\n")
         if len(files) > 1:
-            print(f"Multiple files found for '{filename}': {files}")
+            logger.error(f"multiple files found for '{filename}': {files}")
             sys.exit(1)
         if not files or not files[0]:
-            print(f"No files found for '{filename}'.")
+            logger.error(f"no files found for '{filename}'.")
             sys.exit(1)
         return root / files[0]
     except subprocess.CalledProcessError:
-        print(f"Error running command: git ls-files {filename}")
+        logger.error(f"error running command: git ls-files {filename}")
         sys.exit(1)
 
 
 SECTION_OPEN_RE = re.compile(r"\[(.+?)\]")  # matches [Name], captures Name
 
 
-def parse_input(input: Path) -> dict[str, tuple[int, Union[int, None], dict]]:
+def parse_input(input: Path) -> dict[str, list[tuple[int, Union[int, None], dict]]]:
     """
     Parses a HIT input file to extract its section structure.
     Args:
         input: Path to the HIT input file.
     Returns:
         A nested dictionary representing the section structure. Dictionary keys are section names,
-        and values are tuples of (start_line, end_line, children_dict).
+        and values are lists of tuples (start_line, end_line, children_dict) for each occurrence.
     """
 
     with open(input, "r") as f:
         lines = f.readlines()
 
     # Internal representation for each node:
-    # { "start": int, "end": int | None, "children": {name: node, ...} }
+    # { "start": int, "end": int | None, "children": {name: [node, ...], ...} }
     root_children = {}
     # Stack of (name, node_dict). Root has a dummy name and holds root_children.
     stack = [("ROOT", {"start": None, "end": None, "children": root_children})]
@@ -105,11 +106,8 @@ def parse_input(input: Path) -> dict[str, tuple[int, Union[int, None], dict]]:
             sec_name = m.group(1).strip()
             parent_node = stack[-1][1]  # current top of stack
             children = parent_node["children"]  # its children dict
-            if sec_name in children:
-                print(f"Duplicate section name '{sec_name}' under the same parent at line {lineno}")
-                sys.exit(1)
             new_node = {"start": lineno, "end": None, "children": {}}
-            children[sec_name] = new_node
+            children.setdefault(sec_name, []).append(new_node)
             stack.append((sec_name, new_node))
             continue
 
@@ -123,12 +121,16 @@ def parse_input(input: Path) -> dict[str, tuple[int, Union[int, None], dict]]:
     # Convert internal node representation to the requested tuple format
     def to_tuple_dict(children_dict):
         out = {}
-        for name, node in children_dict.items():
-            out[name] = (
-                node["start"],
-                node["end"],
-                to_tuple_dict(node["children"]),
-            )
+        for name, nodes in children_dict.items():
+            out[name] = []
+            for node in nodes:
+                out[name].append(
+                    (
+                        node["start"],
+                        node["end"],
+                        to_tuple_dict(node["children"]),
+                    )
+                )
         return out
 
     return to_tuple_dict(root_children)
@@ -138,22 +140,29 @@ def list_hit_section(
     structure: dict, lines: list[str], section_map: dict[str, dict], top_level: bool = True
 ) -> str:
     content = ""
-    for section, subsections in section_map.items():
+    items = list(section_map.items())
+    for section_index, (section, subsections) in enumerate(items):
         if section not in structure:
-            print(f"Section '{section}' not found.")
-            sys.exit(1)
-        start, end, substructure = structure[section]
-        if end is None:
-            print(f"Section '{section}' is not closed.")
-            sys.exit(1)
+            continue
+        entries = structure[section]
+        for entry_index, (start, end, substructure) in enumerate(entries):
+            if end is None:
+                logger.error(f"section '{section}' is not closed.")
+                sys.exit(1)
 
-        if not subsections:
-            return "".join(lines[start - 1 : end])
+            if not subsections:
+                content += "".join(lines[start - 1 : end])
+                if top_level and (entry_index < len(entries) - 1 or section_index < len(items) - 1):
+                    content += "\n"
+                continue
 
-        content += lines[start - 1]  # include section header line
-        content += list_hit_section(substructure, lines, subsections, top_level=False)
-        content += lines[end - 1]  # include section closing line
-        content += "\n" if top_level else ""
+            subcontent = list_hit_section(substructure, lines, subsections, top_level=False)
+            if len(subcontent.strip()) != 0:
+                content += lines[start - 1]  # include section header line
+                content += subcontent
+                content += lines[end - 1]  # include section closing line
+            if top_level and (entry_index < len(entries) - 1 or section_index < len(items) - 1):
+                content += "\n"
     return content
 
 
@@ -212,11 +221,10 @@ def list_text(file: str, language: str, label: Union[str, None]) -> list[str]:
     with open(path, "r") as f:
         lines = f.readlines()
 
-    # language-specific comment symbol
-    comment_symbols = {"python": "#", "cpp": "//"}
-    comment = comment_symbols.get(language, "#")
-
     if label is not None:
+        # language-specific comment symbol
+        comment_symbols = {"python": "#", "cpp": "//"}
+        comment = comment_symbols.get(language, "#")
         start_label = f"{comment} @begin:{label}"
         end_label = f"{comment} @end:{label}"
         start_idx = None
@@ -228,11 +236,29 @@ def list_text(file: str, language: str, label: Union[str, None]) -> list[str]:
                 end_idx = idx
                 break
         if start_idx is None or end_idx is None:
-            print(f"Label '{label}' not found in file '{file}'.")
+            logger.error(f"label '{label}' not found in file '{file}'.")
             sys.exit(1)
         content = "".join(lines[start_idx:end_idx])
     else:
         content = "".join(lines)
 
     content = f"```{language}\n{content}```\n"
+    return content.splitlines(keepends=True)
+
+
+def list_output(dir: Path, ex: str) -> list[str]:
+    """
+    Lists the contents of an output file generated by running an example.
+
+    Args:
+        dir: The directory containing the output file.
+        ex: The example name.
+    Returns:
+        A string representing the contents of the specified labeled section.
+    """
+    path = dir / f"{ex}.out"
+    with open(path, "r") as f:
+        lines = f.readlines()
+    content = "".join(lines)
+    content = f"```\n{content}```\n"
     return content.splitlines(keepends=True)

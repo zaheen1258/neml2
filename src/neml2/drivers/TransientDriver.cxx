@@ -29,6 +29,7 @@
 #include "neml2/drivers/TransientDriver.h"
 #include "neml2/misc/assertions.h"
 #include "neml2/models/Model.h"
+#include "neml2/base/Settings.h"
 
 #ifdef NEML2_WORK_DISPATCHER
 #include "neml2/dispatchers/ValueMapLoader.h"
@@ -42,32 +43,26 @@ register_NEML2_object(TransientDriver);
 
 template <typename T>
 static void
-set_ic(ValueMap & storage,
+set_ic(ValueMap & input_storage,
+       ValueMap & output_storage,
        const OptionSet & options,
        const std::string & name_opt,
        const std::string & value_opt,
        const Device & device)
 {
-  const auto & names = options.get<std::vector<VariableName>>(name_opt);
-  const auto & vals = options.get<std::vector<TensorName<T>>>(value_opt);
-  neml_assert(names.size() == vals.size(),
-              "Number of initial condition names ",
-              name_opt,
-              " and number of initial condition values ",
-              value_opt,
-              " should be the same but instead have ",
-              names.size(),
-              " and ",
-              vals.size(),
-              " respectively.");
+  const auto & ics = options.get_map<VariableName, TensorName<T>>(name_opt, value_opt);
   auto * factory = options.get<Factory *>("_factory");
-  neml_assert(factory, "Internal error: factory == nullptr");
-  for (std::size_t i = 0; i < names.size(); i++)
+  neml_assert(factory,
+              "Internal error: factory is null while resolving tensor names. Ensure this driver "
+              "is created via the NEML2 factory.");
+  for (auto & [name, val] : ics)
   {
-    neml_assert(names[i].is_state(),
-                "Initial condition names should start with 'state' but instead got ",
-                names[i]);
-    storage[names[i]] = vals[i].resolve(factory).to(device);
+    const auto [base_name, history_order] =
+        parse_history(name, factory->settings()->history_separator());
+    if (history_order == 0)
+      output_storage[name] = val.resolve(factory).to(device);
+    else
+      input_storage[name] = val.resolve(factory).to(device);
   }
 }
 
@@ -93,12 +88,11 @@ get_force(std::vector<VariableName> & names,
               vals.size(),
               " respectively.");
   auto * factory = options.get<Factory *>("_factory");
-  neml_assert(factory, "Internal error: factory == nullptr");
+  neml_assert(factory,
+              "Internal error: factory is null while resolving tensor names. Ensure this driver "
+              "is created via the NEML2 factory.");
   for (std::size_t i = 0; i < force_names.size(); i++)
   {
-    neml_assert(force_names[i].is_force(),
-                "Driving force names should start with 'forces' but instead got ",
-                force_names[i]);
     names.push_back(force_names[i]);
     values.push_back(vals[i].resolve(factory).to(device));
   }
@@ -110,36 +104,28 @@ TransientDriver::expected_options()
   OptionSet options = ModelDriver::expected_options();
   options.doc() = "Driver for simulating the transient response of an autonomous system.";
 
-  options.set<VariableName>("time") = VariableName(FORCES, "t");
-  options.set("time").doc() = "Time";
-  options.set<TensorName<Scalar>>("prescribed_time");
-  options.set("prescribed_time").doc() =
-      "Time steps to perform the material update. The times tensor must "
-      "have at least one batch dimension representing time steps";
-
-  EnumSelection predictor_selection({"PREVIOUS_STATE", "LINEAR_EXTRAPOLATION"}, "PREVIOUS_STATE");
-  options.set<EnumSelection>("predictor") = predictor_selection;
-  options.set("predictor").doc() =
-      "Predictor used to set the initial guess for each time step. Options are " +
-      predictor_selection.join();
+  options.add<VariableName>("time", "t", "Time");
+  options.add<TensorName<Scalar>>(
+      "prescribed_time",
+      "Time steps to perform the material update. The times tensor must have at least one batch "
+      "dimension representing time steps");
 
 #define OPTION_IC_(T)                                                                              \
-  options.set<std::vector<VariableName>>("ic_" #T "_names");                                       \
-  options.set("ic_" #T "_names").doc() = "Apply initial conditions to these " #T " variables";     \
-  options.set<std::vector<TensorName<T>>>("ic_" #T "_values");                                     \
-  options.set("ic_" #T "_values").doc() = "Initial condition values for the " #T " variables"
+  options.add<std::vector<VariableName>>(                                                          \
+      "ic_" #T "_names", {}, "Apply initial conditions to these " #T " variables");                \
+  options.add<std::vector<TensorName<T>>>(                                                         \
+      "ic_" #T "_values", {}, "Initial condition values for the " #T " variables");
   FOR_ALL_TENSORBASE(OPTION_IC_);
 
 #define OPTION_FORCE_(T)                                                                           \
-  options.set<std::vector<VariableName>>("force_" #T "_names");                                    \
-  options.set("force_" #T "_names").doc() = "Prescribed driving force of tensor type " #T;         \
-  options.set<std::vector<TensorName<T>>>("force_" #T "_values");                                  \
-  options.set("force_" #T "_values").doc() = "Prescribed driving force values of tensor type " #T
+  options.add<std::vector<VariableName>>(                                                          \
+      "force_" #T "_names", {}, "Prescribed driving force of tensor type " #T);                    \
+  options.add<std::vector<TensorName<T>>>(                                                         \
+      "force_" #T "_values", {}, "Prescribed driving force values of tensor type " #T);
   FOR_ALL_TENSORBASE(OPTION_FORCE_);
 
-  options.set<std::string>("save_as");
-  options.set("save_as").doc() =
-      "File path (absolute or relative to the working directory) to store the results";
+  options.add_optional<std::string>(
+      "save_as", "File path (absolute or relative to the working directory) to store the results");
 
   return options;
 }
@@ -149,10 +135,9 @@ TransientDriver::TransientDriver(const OptionSet & options)
     _time_name(options.get<VariableName>("time")),
     _time(resolve_tensor<Scalar>("prescribed_time")),
     _nsteps(_time.dynamic_size(0).concrete()),
-    _predictor(options.get<EnumSelection>("predictor")),
     _result_in(_nsteps),
     _result_out(_nsteps),
-    _save_as(options.get<std::string>("save_as"))
+    _save_as(options.defined("save_as") ? options.get<std::string>("save_as") : "")
 {
   _time = _time.to(_device);
 
@@ -170,13 +155,6 @@ void
 TransientDriver::setup()
 {
   ModelDriver::setup();
-
-  for (const auto & [vname, var] : _model->input_variables())
-    if (var->is_state())
-    {
-      _has_input_state = true;
-      break;
-    }
 }
 
 void
@@ -204,23 +182,6 @@ TransientDriver::diagnose() const
                       _driving_forces[i].dynamic_size(0),
                       " steps");
   }
-
-  // Check for statefulness
-  bool has_old_state = false;
-  for (const auto & [vname, var] : _model->input_variables())
-    if (var->is_old_state())
-    {
-      has_old_state = true;
-      break;
-    }
-
-  if (has_old_state)
-    for (const auto & [vname, var] : _model->input_variables())
-      if (var->is_old_state())
-        diagnostic_assert(_model->output_variables().count(vname.remount(STATE)),
-                          "Input has old state variable ",
-                          vname,
-                          ", but the corresponding output state variable doesn't exist.");
 }
 
 bool
@@ -246,16 +207,13 @@ TransientDriver::solve()
 
     if (_step_count > 0)
       advance_step();
+
     update_forces();
+
     if (_step_count == 0)
-    {
-      store_input();
       apply_ic();
-    }
     else
     {
-      apply_predictor();
-      store_input();
       solve_step();
       postprocess();
     }
@@ -272,74 +230,54 @@ TransientDriver::solve()
 void
 TransientDriver::advance_step()
 {
-  // State from the previous time step becomes the old state in the current time step
-  for (const auto & [var, val] : _result_out[_step_count - 1])
-    if (var.is_state() && _model->input_variables().count(var.remount(OLD_STATE)))
-      _in[var.remount(OLD_STATE)] = val;
+  neml_assert_dbg(_step_count > 0,
+                  "Internal error: advance_step() should only be called after the first step.");
+  const auto & prev_out = _result_out[_step_count - 1];
+  const auto & prev_in = _result_in[_step_count - 1];
 
-  // Forces from the previous time step become the old forces in the current time step
-  for (const auto & [var, val] : _result_in[_step_count - 1])
-    if (var.is_force() && _model->input_variables().count(var.remount(OLD_FORCES)))
-      _in[var.remount(OLD_FORCES)] = val;
+  for (const auto & [vname, var] : _model->input_variables())
+  {
+    const auto order = var->history_order();
+    if (order == 0)
+      continue;
+
+    const auto & base = var->base_name();
+    const auto prev_vname =
+        order == 1 ? base
+                   : base + _model->settings().history_separator() + std::to_string(order - 1);
+
+    if (prev_out.count(prev_vname))
+      _result_in[_step_count][vname] = prev_out.at(prev_vname);
+    else if (prev_in.count(prev_vname))
+      _result_in[_step_count][vname] = prev_in.at(prev_vname);
+  }
 }
 
 void
 TransientDriver::update_forces()
 {
   if (_model->input_variables().count(_time_name))
-    _in[_time_name] = _time.dynamic_index({_step_count});
+    _result_in[_step_count][_time_name] = _time.dynamic_index({_step_count});
 
   for (std::size_t i = 0; i < _driving_force_names.size(); i++)
-    _in[_driving_force_names[i]] = _driving_forces[i].dynamic_index({_step_count});
+    _result_in[_step_count][_driving_force_names[i]] =
+        _driving_forces[i].dynamic_index({_step_count});
 }
 
 void
 TransientDriver::apply_ic()
 {
 #define SET_IC_(T)                                                                                 \
-  set_ic<T>(_result_out[0], input_options(), "ic_" #T "_names", "ic_" #T "_values", _device)
+  set_ic<T>(_result_in[0],                                                                         \
+            _result_out[0],                                                                        \
+            input_options(),                                                                       \
+            "ic_" #T "_names",                                                                     \
+            "ic_" #T "_values",                                                                    \
+            _device)
   FOR_ALL_TENSORBASE(SET_IC_);
 
   // Variables without a user-defined IC are initialized to zeros
-  for (auto && [name, var] : _model->output_variables())
-    if (!_result_out[0].count(name))
-      _result_out[0][name] = var->zeros(_device);
-}
-
-void
-TransientDriver::apply_predictor()
-{
-  if (!_has_input_state)
-    return;
-
-  for (const auto & [vname, var] : _model->input_variables())
-    if (vname.is_state())
-      if (_model->output_variables().count(vname))
-      {
-        if (_predictor == "PREVIOUS_STATE")
-          _in[vname] = _result_out[_step_count - 1][vname];
-        else if (_predictor == "LINEAR_EXTRAPOLATION")
-        {
-          // Fall back to PREVIOUS_STATE predictor at the 1st time step
-          if (_step_count == 1)
-            _in[vname] = _result_out[_step_count - 1][vname];
-          // Otherwise linearly extrapolate in time
-          else
-          {
-            const auto t = Scalar(_in[_time_name]);
-            const auto t_n = Scalar(_result_in[_step_count - 1][_time_name]);
-            const auto t_nm1 = Scalar(_result_in[_step_count - 2][_time_name]);
-            const auto dt = t - t_n;
-            const auto dt_n = t_n - t_nm1;
-
-            const auto s_n = _result_out[_step_count - 1][vname];
-            const auto s_nm1 = _result_out[_step_count - 2][vname];
-            _in[vname] = s_n + (s_n - s_nm1) / dt_n * dt;
-          }
-        }
-        else
-          throw NEMLException("Unrecognized predictor type: " + _predictor.selection());
-      }
+  // ...which is handled by the forward operator
 }
 
 void
@@ -348,13 +286,13 @@ TransientDriver::solve_step()
 #ifdef NEML2_WORK_DISPATCHER
   if (_dispatcher)
   {
-    ValueMapLoader loader(_in, 0);
+    ValueMapLoader loader(_result_in[_step_count], 0);
     _result_out[_step_count] = _dispatcher->run(loader);
     return;
   }
 #endif
 
-  _result_out[_step_count] = _model->value((_in));
+  _result_out[_step_count] = _model->value(_result_in[_step_count]);
 }
 
 void
@@ -376,12 +314,6 @@ TransientDriver::postprocess()
   const auto pp_out = _postprocessor->value(pp_in);
   for (const auto & [name, val] : pp_out)
     _result_out[_step_count][name] = val;
-}
-
-void
-TransientDriver::store_input()
-{
-  _result_in[_step_count] = _in;
 }
 
 std::string

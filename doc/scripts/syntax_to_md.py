@@ -28,6 +28,9 @@ import yaml
 import sys
 import re
 from pathlib import Path
+from loguru import logger
+import unicodedata as ud
+from typing import Union
 
 
 def remove_namespace(type):
@@ -41,15 +44,28 @@ def remove_namespace(type):
     return type
 
 
+def normalize_string_types(type):
+    return re.sub(
+        r"(?:\b[\w:]+::)?basic_string<\s*char\s*,\s*(?:[\w:]+::)?char_traits<char>\s*,\s*(?:[\w:]+::)?allocator<char>\s*>\s*",
+        "std::string",
+        type,
+    )
+
+
+def normalize_vector_types(type):
+    return re.sub(
+        r"(?:\b[\w:]+::)?vector<\s*([^,>]+)\s*,\s*(?:[\w:]+::)?allocator<[^>]+>\s*>\s*",
+        r"vector<\1>",
+        type,
+    )
+
+
 def demangle(type):
     type = re.sub(r"SmallVector<[^>]*>", "tensor shape", type)
-    type = type.replace(
-        "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >",
-        "std::string",
-    )
-    type = re.sub(", std::allocator<.+> ", "", type)
+    type = normalize_string_types(type)
+    type = normalize_vector_types(type)
+    type = re.sub(r",\s*(?:[\w:]+::)?allocator<[^>]+>\s*", "", type)
     type = remove_namespace(type)
-    type = type.replace("LabeledAxisAccessor", "variable name")
     type = re.sub("TensorName<(.+)>", r"\1 🔗", type)
     type = re.sub("vector<(.+)>", r"list of \1", type)
     # Call all integral/floating point types "number", as this syntax documentation faces the general audience potentially without computer science background
@@ -110,14 +126,68 @@ You can always use `Ctrl`+`F` or `Cmd`+`F` to search the entire page.
     return prologue
 
 
-if __name__ == "__main__":
-    with open(sys.argv[1], "r") as stream:
-        syntax = yaml.safe_load(stream)
+def first_nonprintable(path: Path, encoding="utf-8") -> Union[dict, None]:
+    BAD_CATEGORIES = {"Cc", "Cf", "Cs"}
+    ALLOW = {"\n", "\r", "\t"}
+    text = path.read_text(encoding=encoding, errors="surrogateescape")
 
-    outdir = Path(sys.argv[2])
+    line = 1
+    col = 1
+    for idx, ch in enumerate(text):
+        if ch == "\n":
+            line += 1
+            col = 1
+            continue
+
+        cat = ud.category(ch)
+        if ch not in ALLOW and cat in BAD_CATEGORIES:
+            return {
+                "line": line,
+                "col": col,
+                "index": idx,
+                "char": ch,
+                "codepoint": f"U+{ord(ch):04X}",
+                "category": cat,
+                "name": ud.name(ch, "<no name>"),
+            }
+
+        col += 1
+
+    return None
+
+
+def syntax_to_md(syntax_file: Path, outdir: Path, logfile: Path) -> int:
+    """
+    Convert the syntax YAML file extracted by neml2-syntax into markdown files for documentation.
+
+    Args:
+        syntax_file: the input YAML file containing the syntax information
+        outdir: the output directory to write the markdown files to
+        logfile: the output log file to write any syntax issues to
+
+    Returns:
+        the number of syntax issues found, where an issue can be either a missing section, missing object description,
+        or missing option description. Note that syntax issues do not necessarily indicate a problem with the
+        code, but they do indicate missing documentation that should be filled in for better user experience.
+    """
+
+    with open(syntax_file, "r") as stream:
+        try:
+            syntax = yaml.safe_load(stream)
+        except yaml.YAMLError as e:
+            logger.error(f"Error reading YAML file: {syntax_file}")
+            err_msg = str(e)
+            for line in err_msg.splitlines():
+                logger.error(f"  {line}")
+            np = first_nonprintable(syntax_file)
+            if np is not None:
+                logger.error(
+                    "The first non-printable character is at line {line}, column {col} ({codepoint}, {category}, {name})".format(
+                        **np
+                    )
+                )
+            exit(1)
     outdir.mkdir(parents=True, exist_ok=True)
-
-    logfile = Path(sys.argv[3])
     logfile.parent.mkdir(parents=True, exist_ok=True)
 
     with open(logfile, "w") as log:
@@ -146,17 +216,14 @@ if __name__ == "__main__":
                 for type, params in syntax.items():
                     if params["section"] != section:
                         continue
-                    input_type = remove_namespace(params["type"]["value"])
-                    stream.write("### {} {{#{}}}\n\n".format(input_type, input_type.lower()))
+                    stream.write("### {} {{#{}}}\n\n".format(type, type.lower()))
                     if params["doc"]:
                         stream.write("{}\n".format(params["doc"]))
                     else:
                         missing += 1
 
                         log.write(
-                            "  * '{}/{}' is missing object description\n".format(
-                                section, input_type
-                            )
+                            "  * '{}/{}' is missing object description\n".format(section, type)
                         )
                     for param_name, info in params.items():
                         if param_name == "section":
@@ -178,11 +245,10 @@ if __name__ == "__main__":
                             missing += 1
                             log.write(
                                 "  * '{}/{}/{}' is missing option description\n".format(
-                                    section, input_type, param_name
+                                    section, type, param_name
                                 )
                             )
                         else:
-
                             stream.write(
                                 "  <summary>`{}` {} {}</summary>\n\n".format(
                                     param_name, ftype_icon(info["ftype"]), info["doc"]
@@ -191,16 +257,18 @@ if __name__ == "__main__":
                             if "\\f" in info["doc"]:
                                 log.write(
                                     "  * '{}/{}/{}' has formula in its option description\n".format(
-                                        section, input_type, param_name
+                                        section, type, param_name
                                     )
                                 )
                         stream.write("  - <u>Type</u>: {}\n".format(param_type))
+                        stream.write(
+                            "  - <u>Required</u>: {}\n".format("Yes" if info["required"] else "No")
+                        )
                         if param_value:
                             stream.write("  - <u>Default</u>: {}\n".format(param_value))
                         stream.write("</details>\n")
                     stream.write("\n")
-                    stream.write("Detailed documentation [link](@ref {})\n\n".format(type))
-            log.write("\nFinished processing Section '{}'.\n".format(section))
+                    stream.write("Detailed documentation [link](@ref {})\n\n".format(type.lower()))
 
         if missing == 0:
             log.write("No syntax error, good job! :purple_heart:")
@@ -208,3 +276,5 @@ if __name__ == "__main__":
             print("*" * 79, file=sys.stderr)
             print("Syntax errors have been written to", logfile, file=sys.stderr)
             print("*" * 79, file=sys.stderr)
+
+        return missing

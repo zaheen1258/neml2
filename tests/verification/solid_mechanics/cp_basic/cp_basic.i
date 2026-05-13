@@ -39,22 +39,21 @@
 
 [Drivers]
   [driver]
-    type = LDISolidMechanicsDriver
+    type = TransientDriver
     model = 'model_with_stress'
     prescribed_time = 'times'
-    prescribed_deformation_rate = 'deformation_rate'
-    prescribed_vorticity = 'vorticity'
-    ic_Rot_names = 'state/orientation'
+    force_SR2_names = 'deformation_rate'
+    force_SR2_values = 'deformation_rate'
+    force_WR2_names = 'vorticity'
+    force_WR2_values = 'vorticity'
+    ic_Rot_names = 'orientation'
     ic_Rot_values = 'initial_orientation'
-    predictor = 'PREVIOUS_STATE'
-    cp_warmup = true
-    cp_warmup_elastic_scale = 0.05
     save_as = 'result.pt'
   []
   [verification]
     type = VTestVerification
     driver = 'driver'
-    SR2_names = 'output.state/internal/cauchy_stress'
+    SR2_names = 'output.cauchy_stress'
     SR2_values = 'stresses'
     # Looser tolerances here are because the NEML(1) model was generated with lagged, explict
     # integration on the orientations
@@ -63,39 +62,31 @@
   []
 []
 
-[Solvers]
-  [newton]
-    type = NewtonWithLineSearch
-    linesearch_cutback = 2.0
-    linesearch_stopping_criteria = 1.0e-3
-    max_linesearch_iterations = 5
-  []
-[]
-
 [Data]
   [crystal_geometry]
     type = CubicCrystal
-    lattice_parameter = "a"
-    slip_directions = "sdirs"
-    slip_planes = "splanes"
+    lattice_parameter = 'a'
+    slip_directions = 'sdirs'
+    slip_planes = 'splanes'
   []
 []
 
 [Models]
   [euler_rodrigues]
     type = RotationMatrix
-    from = 'state/orientation'
-    to = 'state/orientation_matrix'
+    from = 'orientation'
+    to = 'orientation_matrix'
   []
   [elasticity]
     type = LinearIsotropicElasticity
     coefficients = '1e5 0.25'
     coefficient_types = 'YOUNGS_MODULUS POISSONS_RATIO'
-    strain = 'state/elastic_strain'
-    stress = 'state/internal/cauchy_stress'
+    strain = 'elastic_strain'
+    stress = 'cauchy_stress'
   []
   [resolved_shear]
     type = ResolvedShear
+    stress = 'cauchy_stress'
   []
   [elastic_stretch]
     type = ElasticStrainRate
@@ -128,15 +119,15 @@
   []
   [integrate_slip_hardening]
     type = ScalarBackwardEulerTimeIntegration
-    variable = 'state/internal/slip_hardening'
+    variable = 'slip_hardening'
   []
   [integrate_elastic_strain]
     type = SR2BackwardEulerTimeIntegration
-    variable = 'state/elastic_strain'
+    variable = 'elastic_strain'
   []
   [integrate_orientation]
     type = WR2ImplicitExponentialTimeIntegration
-    variable = 'state/orientation'
+    variable = 'orientation'
   []
 
   [implicit_rate]
@@ -146,14 +137,52 @@
               plastic_spin sum_slip_rates slip_rule slip_strength voce_hardening
               integrate_slip_hardening integrate_elastic_strain integrate_orientation"
   []
+[]
+
+[EquationSystems]
+  [eq_sys]
+    type = NonlinearSystem
+    model = 'implicit_rate'
+    unknowns = 'elastic_strain slip_hardening orientation'
+  []
+[]
+
+[Solvers]
+  [newton]
+    type = NewtonWithLineSearch
+    linesearch_cutback = 2.0
+    linesearch_stopping_criteria = 1.0e-3
+    max_linesearch_iterations = 5
+    linear_solver = 'lu'
+  []
+  [lu]
+    type = DenseLU
+  []
+[]
+
+[Models]
+  [cp_warmup_1]
+    type = CrystalPlasticityStrainPredictor
+    scale = 0.05
+  []
+  [cp_warmup_2]
+    type = ConstantExtrapolationPredictor
+    unknowns_Rot = 'orientation'
+    unknowns_Scalar = 'slip_hardening'
+  []
+  [predictor]
+    type = ComposedModel
+    models = 'cp_warmup_1 cp_warmup_2'
+  []
   [model]
     type = ImplicitUpdate
-    implicit_model = 'implicit_rate'
+    equation_system = 'eq_sys'
     solver = 'newton'
+    predictor = 'predictor'
   []
   [model_with_stress]
     type = ComposedModel
     models = 'model elasticity'
-    additional_outputs = 'state/elastic_strain'
+    additional_outputs = 'elastic_strain'
   []
 []

@@ -34,6 +34,7 @@
 namespace neml2
 {
 class Settings;
+class EquationSystem;
 class Solver;
 class Data;
 class Model;
@@ -81,8 +82,8 @@ public:
 
   /// A readonly reference to the object's name
   const std::string & name() const { return _input_options.name(); }
-  /// A readonly reference to the object's type
-  const std::string & type() const { return _input_options.type(); }
+  /// The object's type
+  std::string type() const { return _input_options.type(); }
   /// A readonly reference to the object's path
   const std::string & path() const { return _input_options.path(); }
   /// A readonly reference to the object's docstring
@@ -110,6 +111,9 @@ public:
   /// Get an object from the factory
   template <class T>
   std::shared_ptr<T> get_object(const std::string & section, const std::string & name);
+  /// Get an equation system from the factory
+  template <class T = EquationSystem>
+  std::shared_ptr<T> get_es(const std::string & name);
   /// Get a solver from the factory
   template <class T = Solver>
   std::shared_ptr<T> get_solver(const std::string & name);
@@ -126,6 +130,44 @@ public:
   template <class T = WorkScheduler>
   std::shared_ptr<T> get_scheduler(const std::string & name);
   ///@}
+
+protected:
+  /**
+   * @brief Helper method to wrap a variable name into its history form
+   *
+   * This is a personal preference in the end. The idea is to have a consistent way to name the
+   * history form of a variable, which is commonly used in time integration. The behavior can be
+   * controlled via Settings::history_separator.
+   *
+   * @param var The variable name
+   * @param nstep The history step (0 for current, 1 for previous, etc.)
+   * @return The history form of the variable name
+   */
+  VariableName history_name(const VariableName & var, std::size_t nstep) const;
+
+  /**
+   * @brief Helper method to wrap a variable name into its rate form
+   *
+   * This is a personal preference in the end. The idea is to have a consistent way to name the rate
+   * form of a variable, which is commonly used in time integration. The behavior can be controlled
+   * via Settings::rate_prefix and Settings::rate_suffix.
+   *
+   * @param var The variable name
+   * @return The rate form of the variable name
+   */
+  VariableName rate_name(const VariableName & var) const;
+
+  /**
+   * @brief Helper method to wrap a variable name into its residual form
+   *
+   * Similar to rate_name, this is for consistent naming of residual variables, which are commonly
+   * used in nonlinear systems. The behavior can be controlled via Settings::residual_prefix and
+   * Settings::residual_suffix.
+   *
+   * @param var The variable name
+   * @return The residual form of the variable name
+   */
+  VariableName residual_name(const VariableName & var) const;
 
 private:
   const OptionSet _input_options;
@@ -170,9 +212,32 @@ std::shared_ptr<T>
 NEML2Object::get_object(const std::string & section, const std::string & name)
 {
   auto obj_name = _input_options.contains(name) ? _input_options.get<std::string>(name) : name;
+
   if (!_factory)
     throw NEMLException("Internal error: factory is nullptr for object " + this->name());
-  return _factory->get_object<T>(section, obj_name);
+
+  if (!_factory->has_object(section, obj_name))
+  {
+    if (_input_options.contains(name))
+      throw NEMLException(
+          path() + " failed to get an object via option '" + name + "' under section " + section +
+          ". Currently, " + path() + "/" + name + " = '" + obj_name +
+          "'. Check to make sure the object name is specified correctly in the input file.");
+    else
+      throw NEMLException(path() + " failed to get an object named '" + obj_name +
+                          "' under section " + section + ".");
+  }
+
+  OptionSet extra_opts;
+  extra_opts.add_private<NEML2Object *>("_host", host());
+  return _factory->get_object<T>(section, obj_name, extra_opts, /*force_create=*/false);
+}
+
+template <class T>
+std::shared_ptr<T>
+NEML2Object::get_es(const std::string & name)
+{
+  return get_object<T>("EquationSystems", name);
 }
 
 template <class T>

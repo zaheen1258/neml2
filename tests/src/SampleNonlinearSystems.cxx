@@ -23,109 +23,181 @@
 // THE SOFTWARE.
 
 #include "SampleNonlinearSystems.h"
+#include "neml2/equation_systems/AxisLayout.h"
+#include "neml2/equation_systems/SparseVector.h"
+#include "neml2/misc/types.h"
 #include "neml2/tensors/Scalar.h"
 #include "neml2/tensors/functions/pow.h"
-#include "neml2/misc/assertions.h"
 
 namespace neml2
 {
-TestNonlinearSystem::TestNonlinearSystem(const OptionSet & options)
-  : NonlinearSystem(options)
+TestNonlinearSystem::TestNonlinearSystem(TensorShape B,
+                                         Size n,
+                                         std::vector<Size> residual_group_sizes,
+                                         std::vector<Size> unknown_group_sizes)
+  : _B(std::move(B)),
+    _n(n),
+    _residual_group_sizes(residual_group_sizes.empty() ? std::vector<Size>{n}
+                                                       : std::move(residual_group_sizes)),
+    _unknown_group_sizes(unknown_group_sizes.empty() ? std::vector<Size>{n}
+                                                     : std::move(unknown_group_sizes))
 {
+}
+
+std::shared_ptr<AxisLayout>
+TestNonlinearSystem::setup_ulayout()
+{
+  std::vector<std::vector<VariableName>> vars(_unknown_group_sizes.size());
+  std::vector<TensorShape> intmd_shapes(_n, TensorShape{});
+  std::vector<TensorShape> base_shapes(_n, TensorShape{});
+  std::size_t idx = 0;
+  for (std::size_t g = 0; g < _unknown_group_sizes.size(); g++)
+  {
+    vars[g].resize(_unknown_group_sizes[g]);
+    for (Size i = 0; i < _unknown_group_sizes[g]; i++, idx++)
+      vars[g][i] = "u_" + std::to_string(idx);
+  }
+  std::vector<AxisLayout::IStructure> istr(_unknown_group_sizes.size(),
+                                           AxisLayout::IStructure::DENSE);
+  return std::make_shared<AxisLayout>(vars, intmd_shapes, base_shapes, istr);
+}
+
+std::shared_ptr<AxisLayout>
+TestNonlinearSystem::setup_glayout()
+{
+  std::vector<std::vector<VariableName>> vars;
+  std::vector<TensorShape> intmd_shapes, base_shapes;
+  std::vector<AxisLayout::IStructure> istr;
+  return std::make_shared<AxisLayout>(vars, intmd_shapes, base_shapes, istr);
+}
+
+std::shared_ptr<AxisLayout>
+TestNonlinearSystem::setup_blayout()
+{
+  std::vector<std::vector<VariableName>> vars(_residual_group_sizes.size());
+  std::vector<TensorShape> intmd_shapes(_n, TensorShape{});
+  std::vector<TensorShape> base_shapes(_n, TensorShape{});
+  std::size_t idx = 0;
+  for (std::size_t g = 0; g < _residual_group_sizes.size(); g++)
+  {
+    vars[g].resize(_residual_group_sizes[g]);
+    for (Size i = 0; i < _residual_group_sizes[g]; i++, idx++)
+      vars[g][i] = "r_" + std::to_string(idx);
+  }
+  std::vector<AxisLayout::IStructure> istr(_residual_group_sizes.size(),
+                                           AxisLayout::IStructure::DENSE);
+  return std::make_shared<AxisLayout>(vars, intmd_shapes, base_shapes, istr);
 }
 
 void
-TestNonlinearSystem::set_guess(const NonlinearSystem::Sol<false> & x)
+TestNonlinearSystem::assemble(AssembledMatrix * A, AssembledMatrix * /*B*/, AssembledVector * b)
 {
-  neml_assert_dbg(x.base_dim() == 1, "Trial solution must be one dimensional");
-  _x = x;
-}
-
-PowerTestSystem::PowerTestSystem(const OptionSet & options)
-  : TestNonlinearSystem(options)
-{
-}
-
-void
-PowerTestSystem::assemble(NonlinearSystem::Res<false> * residual,
-                          NonlinearSystem::Jac<false> * Jacobian)
-{
-  if (residual)
+  if (b)
   {
-    *residual = NonlinearSystem::Res<false>(Tensor::zeros_like(_x));
-    for (Size i = 0; i < _x.base_size(0); i++)
-      residual->base_index_put_({i}, pow(_x.base_index({i}), Scalar(i + 1, _x.options())) - 1.0);
+    for (_I = 0; _I < blayout().ngroup(); _I++)
+    {
+      auto group_ndof = (Size)blayout().group(_I).nvar();
+      b->tensors[_I] = Tensor::zeros(_B, {}, group_ndof, _u.options());
+      for (_i = 0; _i < group_ndof; _i++)
+      {
+        auto res = residual();
+        if (res.defined())
+          b->tensors[_I].base_index_put_({_i}, res);
+      }
+    }
   }
 
-  if (Jacobian)
+  if (A)
   {
-    *Jacobian = NonlinearSystem::Jac<false>(
-        Tensor::zeros(_x.dynamic_sizes(), {}, {_x.base_size(0), _x.base_size(0)}, _x.options()));
-    for (Size i = 0; i < _x.base_size(0); i++)
-      Jacobian->base_index_put_({i, i}, (i + 1) * pow(_x.base_index({i}), Scalar(i, _x.options())));
-  }
-}
-
-Tensor
-PowerTestSystem::exact_solution(const NonlinearSystem::Sol<false> & x) const
-{
-  return Tensor::ones_like(x);
-}
-
-RosenbrockTestSystem::RosenbrockTestSystem(const OptionSet & options)
-  : TestNonlinearSystem(options)
-{
-}
-
-void
-RosenbrockTestSystem::assemble(NonlinearSystem::Res<false> * residual,
-                               NonlinearSystem::Jac<false> * Jacobian)
-{
-  if (residual)
-  {
-    auto xm = _x.base_index({indexing::Slice(1, -1)});
-    auto xm_m1 = _x.base_index({indexing::Slice(0, -2)});
-    auto xm_p1 = _x.base_index({indexing::Slice(2, indexing::None)});
-
-    auto x0 = _x.base_index({0});
-    auto x1 = _x.base_index({1});
-
-    auto xn1 = _x.base_index({-1});
-    auto xn2 = _x.base_index({-2});
-
-    *residual = NonlinearSystem::Res<false>(Tensor::zeros_like(_x));
-    residual->base_index_put_({indexing::Slice(1, -1)},
-                              200 * (xm - pow(xm_m1, 2.0)) - 400 * (xm_p1 - pow(xm, 2.0)) * xm -
-                                  2 * (1 - xm));
-    residual->base_index_put_({0}, -400 * x0 * (x1 - pow(x0, 2.0)) - 2 * (1 - x0));
-    residual->base_index_put_({-1}, 200.0 * (xn1 - pow(xn2, 2.0)));
-  }
-
-  if (Jacobian)
-  {
-    auto s_x0n1 = _x.base_index({indexing::Slice(0, -1)});
-    auto s_x11 = _x.base_index({indexing::Slice(1, -1)});
-    auto s_x2 = _x.base_index({indexing::Slice(2, indexing::None)});
-
-    auto x0 = _x.base_index({0});
-    auto x1 = _x.base_index({1});
-
-    auto d1 = -400 * s_x0n1;
-    auto H = at::diag_embed(d1, -1) + at::diag_embed(d1, 1);
-    auto diagonal = Tensor::zeros_like(_x);
-
-    diagonal.base_index_put_({0}, 1200 * pow(x0, 2.0) - 400.0 * x1 + 2);
-    diagonal.base_index_put_({-1}, Scalar(200.0, _x.options()));
-    diagonal.base_index_put_({indexing::Slice(1, -1)}, 202 + 1200 * pow(s_x11, 2.0) - 400 * s_x2);
-
-    *Jacobian =
-        NonlinearSystem::Jac<false>(Tensor(at::diag_embed(diagonal) + H, _x.dynamic_sizes()));
+    for (_I = 0; _I < blayout().ngroup(); _I++)
+      for (_J = 0; _J < ulayout().ngroup(); _J++)
+      {
+        auto row_group_ndof = (Size)blayout().group(_I).nvar();
+        auto col_group_ndof = (Size)ulayout().group(_J).nvar();
+        A->tensors[_I][_J] =
+            Tensor::zeros(_B, {}, {Size(row_group_ndof), Size(col_group_ndof)}, _u.options());
+        for (_i = 0; _i < row_group_ndof; _i++)
+          for (_j = 0; _j < col_group_ndof; _j++)
+          {
+            auto jac = jacobian();
+            if (jac.defined())
+              A->tensors[_I][_J].base_index_put_({_i, _j}, jac);
+          }
+      }
   }
 }
 
-Tensor
-RosenbrockTestSystem::exact_solution(const NonlinearSystem::Sol<false> & x) const
+AssembledVector
+PowerTestSystem::exact_solution(const AssembledVector & u) const
 {
-  return Tensor::ones_like(x);
+  AssembledVector sol(ulayout());
+  for (std::size_t i = 0; i < u.layout.ngroup(); i++)
+    sol.tensors[i] = Tensor::ones_like(u.tensors[i]);
+  return sol;
 }
+
+Scalar
+PowerTestSystem::residual() const
+{
+  const auto & u = _u.tensors[_I];
+  return 1.0 - pow(u.base_index({_i}), Scalar(double(_i) + 1, _u.options()));
+}
+
+Scalar
+PowerTestSystem::jacobian() const
+{
+  if (_I != _J || _i != _j)
+    return Scalar();
+  const auto & u = _u.tensors[_I];
+  return (double(_i) + 1) * pow(u.base_index({_i}), Scalar(double(_i), _u.options()));
+}
+
+AssembledVector
+RosenbrockTestSystem::exact_solution(const AssembledVector & u) const
+{
+  AssembledVector sol(ulayout());
+  for (std::size_t i = 0; i < u.layout.ngroup(); i++)
+    sol.tensors[i] = Tensor::ones_like(u.tensors[i]);
+  return sol;
+}
+
+Scalar
+RosenbrockTestSystem::residual() const
+{
+  const auto & u = _u.tensors[_I];
+  const auto m = (Size)_u.layout.group(_I).nvar();
+  if (_i == 0)
+    return 400 * u.base_index({_i}) * (u.base_index({_i + 1}) - pow(u.base_index({_i}), 2.0)) +
+           2 * (1 - u.base_index({_i}));
+  else if (_i == m - 1)
+    return -200.0 * (u.base_index({_i}) - pow(u.base_index({_i - 1}), 2.0));
+  else
+    return -200 * (u.base_index({_i}) - pow(u.base_index({_i - 1}), 2.0)) +
+           400 * (u.base_index({_i + 1}) - pow(u.base_index({_i}), 2.0)) * u.base_index({_i}) +
+           2 * (1 - u.base_index({_i}));
+}
+
+Scalar
+RosenbrockTestSystem::jacobian() const
+{
+  if (_I != _J)
+    return Scalar();
+
+  const auto & u = _u.tensors[_I];
+  const auto m = (Size)_u.layout.group(_I).nvar();
+
+  if (_i == 0 && _j == 0)
+    return 1200 * pow(u.base_index({_i}), 2.0) - 400 * u.base_index({_i + 1}) + 2;
+  else if (_i == m - 1 && _j == m - 1)
+    return Scalar(200.0, u.base_index({_i}).options());
+  else if (_j + 1 == _i)
+    return -400 * u.base_index({_j});
+  else if (_j == _i)
+    return 202 + 1200 * pow(u.base_index({_i}), 2.0) - 400 * u.base_index({_i + 1});
+  else if (_i + 1 == _j)
+    return -400 * u.base_index({_i});
+
+  return Scalar();
+}
+
 }

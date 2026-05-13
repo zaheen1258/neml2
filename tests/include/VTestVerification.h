@@ -63,5 +63,8 @@ private:
 
   double _rtol;
   double _atol;
+
+  /// Time steps to verify
+  std::vector<size_t> _time_steps;
 };
 } // namespace neml2

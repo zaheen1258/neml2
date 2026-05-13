@@ -23,6 +23,8 @@
 // THE SOFTWARE.
 
 #include "neml2/solvers/NonlinearSolver.h"
+#include "neml2/solvers/LinearSolver.h"
+#include "neml2/misc/assertions.h"
 
 namespace neml2
 {
@@ -31,15 +33,12 @@ NonlinearSolver::expected_options()
 {
   OptionSet options = Solver::expected_options();
 
-  options.set<double>("abs_tol") = 1e-10;
-  options.set("abs_tol").doc() = "Absolute tolerance in the convergence criteria";
+  options.add<std::string>("linear_solver", "The linear solver to use within the nonlinear solver");
 
-  options.set<double>("rel_tol") = 1e-8;
-  options.set("rel_tol").doc() = "Relative tolerance in the convergence criteria";
-
-  options.set<unsigned int>("max_its") = 100;
-  options.set("max_its").doc() =
-      "Maximum number of iterations allowed before issuing an error/exception";
+  options.add<double>("abs_tol", 1e-10, "Absolute tolerance in the convergence criteria");
+  options.add<double>("rel_tol", 1e-8, "Relative tolerance in the convergence criteria");
+  options.add<unsigned int>(
+      "max_its", 100, "Maximum number of iterations allowed before issuing an error/exception");
 
   return options;
 }
@@ -50,5 +49,18 @@ NonlinearSolver::NonlinearSolver(const OptionSet & options)
     rtol(options.get<double>("rel_tol")),
     miters(options.get<unsigned int>("max_its"))
 {
+  neml_assert(
+      options.user_specified("linear_solver"),
+      "The 'linear_solver' option is required. Refer to "
+      "https://applied-material-modeling.github.io/neml2/migration-200-210.html#linear_solver for "
+      "more information.");
+  linear_solver = get_solver<LinearSolver>("linear_solver");
 }
+
+void
+NonlinearSolver::to(const TensorOptions & options)
+{
+  linear_solver->to(options);
+}
+
 } // namespace neml2

@@ -18,25 +18,20 @@
 
 [Drivers]
   [driver]
-    type = SDTSolidMechanicsDriver
+    type = TransientDriver
     model = 'model'
     prescribed_time = 'times'
-    prescribed_strain = 'strains'
+    force_SR2_names = 'E'
+    force_SR2_values = 'strains'
     save_as = 'result.pt'
   []
   [verification]
     type = VTestVerification
     driver = 'driver'
-    SR2_names = 'output.state/S'
+    SR2_names = 'output.stress'
     SR2_values = 'stresses'
     atol = 1e-5
     rtol = 1e-5
-  []
-[]
-
-[Solvers]
-  [newton]
-    type = Newton
   []
 []
 
@@ -48,28 +43,29 @@
   []
   [kinharden]
     type = SR2LinearCombination
-    from_var = 'state/internal/X1 state/internal/X2'
-    to_var = 'state/internal/X'
+    from = 'X1 X2'
+    to = 'X'
   []
   [mandel_stress]
     type = IsotropicMandelStress
+    cauchy_stress = 'stress'
   []
   [overstress]
     type = SR2LinearCombination
-    to_var = 'state/internal/O'
-    from_var = 'state/internal/M state/internal/X'
-    coefficients = '1 -1'
+    to = 'O'
+    from = 'mandel_stress X'
+    weights = '1 -1'
   []
   [vonmises]
     type = SR2Invariant
     invariant_type = 'VONMISES'
-    tensor = 'state/internal/O'
-    invariant = 'state/internal/s'
+    tensor = 'O'
+    invariant = 'effective_stress'
   []
   [yield]
     type = YieldFunction
     yield_stress = 10
-    isotropic_hardening = 'state/internal/k'
+    isotropic_hardening = 'isotropic_hardening'
   []
   [flow]
     type = ComposedModel
@@ -78,9 +74,9 @@
   [normality]
     type = Normality
     model = 'flow'
-    function = 'state/internal/fp'
-    from = 'state/internal/M state/internal/k'
-    to = 'state/internal/NM state/internal/Nk'
+    function = 'yield_function'
+    from = 'mandel_stress isotropic_hardening'
+    to = 'flow_direction isotropic_hardening_direction'
   []
   [flow_rate]
     type = PerzynaPlasticFlowRate
@@ -92,7 +88,7 @@
   []
   [X1rate]
     type = ChabochePlasticHardening
-    back_stress = 'state/internal/X1'
+    back_stress = 'X1'
     C = 5000
     g = 8.246615467370033 # 10.1 * sqrt(2/3)
     A = 1.224744871391589e-06 # 1.0e-6 * sqrt(3/2)
@@ -100,7 +96,7 @@
   []
   [X2rate]
     type = ChabochePlasticHardening
-    back_stress = 'state/internal/X2'
+    back_stress = 'X2'
     C = 1000
     g = 4.245782220824175 # 5.2 * sqrt(2/3)
     A = 1.224744871391589e-10 # 1.0e-10 * sqrt(3/2)
@@ -111,14 +107,13 @@
   []
   [Erate]
     type = SR2VariableRate
-    variable = 'forces/E'
-    rate = 'forces/E_rate'
+    variable = 'E'
   []
   [Eerate]
     type = SR2LinearCombination
-    from_var = 'forces/E_rate state/internal/Ep_rate'
-    to_var = 'state/internal/Ee_rate'
-    coefficients = '1 -1'
+    from = 'E_rate plastic_strain_rate'
+    to = 'strain_rate'
+    weights = '1 -1'
   []
   [elasticity]
     type = LinearIsotropicElasticity
@@ -128,28 +123,55 @@
   []
   [integrate_ep]
     type = ScalarBackwardEulerTimeIntegration
-    variable = 'state/internal/ep'
+    variable = 'equivalent_plastic_strain'
   []
   [integrate_X1]
     type = SR2BackwardEulerTimeIntegration
-    variable = 'state/internal/X1'
+    variable = 'X1'
   []
   [integrate_X2]
     type = SR2BackwardEulerTimeIntegration
-    variable = 'state/internal/X2'
+    variable = 'X2'
   []
   [integrate_stress]
     type = SR2BackwardEulerTimeIntegration
-    variable = 'state/S'
+    variable = 'stress'
   []
   [implicit_rate]
     type = ComposedModel
     models = 'isoharden kinharden mandel_stress overstress vonmises yield normality flow_rate eprate Eprate X1rate X2rate Erate Eerate elasticity integrate_stress integrate_ep integrate_X1 integrate_X2'
   []
+[]
+
+[EquationSystems]
+  [eq_sys]
+    type = NonlinearSystem
+    model = 'implicit_rate'
+    unknowns = 'stress equivalent_plastic_strain X1 X2'
+  []
+[]
+
+[Solvers]
+  [newton]
+    type = Newton
+    linear_solver = 'lu'
+  []
+  [lu]
+    type = DenseLU
+  []
+[]
+
+[Models]
+  [predictor]
+    type = ConstantExtrapolationPredictor
+    unknowns_SR2 = 'stress X1 X2'
+    unknowns_Scalar = 'equivalent_plastic_strain'
+  []
   [model]
     type = ImplicitUpdate
-    implicit_model = 'implicit_rate'
+    equation_system = 'eq_sys'
     solver = 'newton'
+    predictor = 'predictor'
   []
 []
 

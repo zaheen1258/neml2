@@ -2,13 +2,10 @@
 contrib/argparse*
 contrib/Catch2*
 contrib/csvparser*
-contrib/Doxygen*
-contrib/doxygen-awesome-css*
-contrib/hit*
+contrib/nmhit
+contrib/nmhit-build
 contrib/nlohmann_json*
-contrib/timpi*
 contrib/torch*
-contrib/wasp*
 contrib/gperftools*
 
 # CMake
@@ -39,6 +36,7 @@ DartConfiguration.tcl
 .DS_Store
 
 # Python
+.venv
 __pycache__
 *.pyi
 neml2.egg-info
@@ -62,3 +60,7 @@ Testing
 *.pdf
 *.gv
 *.json
+
+# Agents
+.claude/settings.local.json
+!.claude/settings.json

@@ -1,8 +1,10 @@
 # ----------------------------------------------------------------------------
 # Project metadata
 # ----------------------------------------------------------------------------
-cmake_minimum_required(VERSION 3.26)
-project(NEML2 VERSION 2.0.0 LANGUAGES C CXX)
+# dependencies: cmake.version_min
+cmake_minimum_required(VERSION 3.26.1)
+# dependencies: neml2.version
+project(NEML2 VERSION 2.1.2 LANGUAGES C CXX)
 
 # ----------------------------------------------------------------------------
 # Policy
@@ -56,12 +58,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS_COVERAGE "-O0 -fprofile-arcs -ftest-coverage" CACHE STRING "Flags used by C++ compiler during coverage builds" FORCE)
 set(CMAKE_CXX_FLAGS_THREADSANITIZER "-O1 -g -fsanitize=thread" CACHE STRING "Flags used by C++ compiler for build type ThreadSanitizer" FORCE)
 set(CMAKE_CXX_FLAGS_ADDRESSSANITIZER "-O1 -g -fsanitize=address -fno-omit-frame-pointer" CACHE STRING "Flags used by C++ compiler for build type AddressSanitizer" FORCE)
-set(CMAKE_CXX_FLAGS_PROFILING "-O2 -g -fno-omit-frame-pointer" CACHE STRING "Flags used by C++ compiler for build type Profiling" FORCE)
+set(CMAKE_CXX_FLAGS_PROFILING "-O2 -g -fno-omit-frame-pointer -DNDEBUG" CACHE STRING "Flags used by C++ compiler for build type Profiling" FORCE)
 set(NEML2_PCH ON CACHE BOOL "Use precompiled headers")
 set(NEML2_TESTS ON CACHE BOOL "Build NEML2 tests")
-set(NEML2_RUNNER OFF CACHE BOOL "Build a simple runner for benchmarking, debugging, etc.")
-set(NEML2_PYBIND OFF CACHE BOOL "Build NEML2 Python bindings")
-set(NEML2_DOC OFF CACHE BOOL "Build NEML2 documentation (html)")
+set(NEML2_TOOLS OFF CACHE BOOL "Build utility binaries")
 set(NEML2_WORK_DISPATCHER OFF CACHE BOOL "Enable NEML2 work dispatcher")
 set(NEML2_JSON OFF CACHE BOOL "Enable JSON support")
 set(NEML2_CSV OFF CACHE BOOL "Enable CSV support")
@@ -72,17 +72,16 @@ set(NEML2_WHEEL OFF CACHE INTERNAL "Build NEML2 as a Python wheel. This is suppo
 # ----------------------------------------------------------------------------
 # Dependencies and 3rd party packages
 # ----------------------------------------------------------------------------
-set(torch_VERSION "2.8.0" CACHE STRING "Default libTorch/PyTorch version to download")
 set(torch_SEARCH_SITE_PACKAGES ON CACHE BOOL "Search for libTorch in Python site-packages")
-set(Doxygen_VERSION "1.12.0" CACHE STRING "Default doxygen version to download")
-set(doxygen_awesome_css_VERSION "v2.3.4" CACHE STRING "Default doxygen-awesome version to download")
-set(wasp_VERSION "78e8705d3743cee12cb0b024a51a98db2c3713bc" CACHE STRING "Default WASP version to download (if not found)")
-set(hit_VERSION "df7e49e95e5ea9ebef0e7578408221d3aeaf7513" CACHE STRING "Default HIT version to download")
+# dependencies: catch2.version
 set(catch2_VERSION "v3.5.4" CACHE STRING "Default Catch2 version to download (if not found)")
+# dependencies: gperftools.version
 set(gperftools_VERSION "gperftools-2.17" CACHE STRING "Default gperftools version to download")
+# dependencies: argparse.version
 set(argparse_VERSION "v3.2" CACHE STRING "Default argparse version to download")
-set(timpi_VERSION "v1.9.0_bootstrapped" CACHE STRING "Default TIMPI version to download")
+# dependencies: nlohmann_json.version
 set(nlohmann_json_VERSION "v3.11.3" CACHE STRING "Default nlohmann json version to download")
+# dependencies: csvparser.version
 set(csvparser_VERSION "2.3.0" CACHE STRING "Default csv-parser version to download")
 
 # ----------------------------------------------------------------------------
@@ -105,17 +104,18 @@ endif()
 include(DepUtils)
 
 # ----------------------------------------------------------------------------
-# Python3
+# lib directory
 # ----------------------------------------------------------------------------
-find_package(Python3 COMPONENTS Interpreter OPTIONAL_COMPONENTS Development.Module)
-# If Python3 is found, let's also find the user site-packages (in case torch is installed there)
-if(Python3_EXECUTABLE)
-      execute_process(
-            COMMAND ${Python3_EXECUTABLE} -m site --user-site
-            OUTPUT_VARIABLE Python3_USER_SITE
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-      )
+# During an editable wheel install, we want to put the cpython libraries in the source tree so
+# that they can be found by the redirected imports..
+if(NEML2_WHEEL AND DEFINED SKBUILD_STATE AND SKBUILD_STATE STREQUAL "editable")
+      set(INSTALL_LIBDIR ${NEML2_SOURCE_DIR}/python/neml2/lib)
+      set(INSTALL_BINDIR ${NEML2_SOURCE_DIR}/python/neml2/bin)
+else()
+      set(INSTALL_LIBDIR lib)
+      set(INSTALL_BINDIR bin)
 endif()
+
 
 # ----------------------------------------------------------------------------
 # The following blocks are used to find and download 3rd party dependencies
@@ -133,25 +133,7 @@ endif()
 find_package(torch MODULE OPTIONAL_COMPONENTS cuda python)
 
 if(NOT torch_FOUND)
-      if(UNIX)
-            if(NOT APPLE)
-                  set(torch_URL https://download.pytorch.org/libtorch/cpu/libtorch-shared-with-deps-${torch_VERSION}%2Bcpu.zip)
-            else()
-                  if(${CMAKE_SYSTEM_PROCESSOR} STREQUAL "arm64")
-                        set(torch_URL https://download.pytorch.org/libtorch/cpu/libtorch-macos-arm64-${torch_VERSION}.zip)
-                  else()
-                        set(torch_URL https://download.pytorch.org/libtorch/cpu/libtorch-macos-x86_64-${torch_VERSION}.zip)
-                  endif()
-            endif()
-      endif()
-
-      if(torch_URL)
-            download_from_url(torch ${torch_URL} ${NEML2_CONTRIB_PREFIX})
-            set(torch_ROOT ${NEML2_CONTRIB_PREFIX}/torch-src)
-            find_package(torch MODULE REQUIRED OPTIONAL_COMPONENTS cuda python)
-      else()
-            message(FATAL_ERROR "Torch not found.")
-      endif()
+      message(FATAL_ERROR "Torch not found.")
 endif()
 
 # Note the torch libraries are never installed as part of the NEML2 installation.
@@ -165,97 +147,69 @@ endif()
 # assuming the wheel is installed in a standard site-packages location alongside torch.
 
 # find_package(neml2 CONFIG) will rely on the Findtorch.cmake module
-install(FILES
-      ${NEML2_SOURCE_DIR}/cmake/Modules/Findtorch.cmake
-      ${NEML2_SOURCE_DIR}/cmake/Modules/DetectTorchCXXABI.cxx
-      DESTINATION share/cmake/neml2/Modules
-      COMPONENT libneml2
-)
-
-# ----------------------------------------------------------------------------
-# wasp
-# ----------------------------------------------------------------------------
-find_package(wasp MODULE COMPONENTS core hit)
-
-if(NOT wasp_FOUND)
-      download_from_git(wasp https://code.ornl.gov/neams-workbench/wasp.git ${NEML2_CONTRIB_PREFIX} ${wasp_VERSION})
-      set(wasp_INSTALL_PREFIX ${NEML2_CONTRIB_PREFIX}/wasp CACHE PATH "wasp install prefix")
-      custom_install(wasp contrib/install_wasp.sh ${NEML2_CONTRIB_PREFIX}/wasp-src ${NEML2_CONTRIB_PREFIX}/wasp-build ${wasp_INSTALL_PREFIX})
-      find_package(wasp MODULE REQUIRED COMPONENTS core hit)
+if(NOT SKBUILD_STATE STREQUAL "editable")
+      install(FILES
+            ${NEML2_SOURCE_DIR}/cmake/Modules/Findtorch.cmake
+            ${NEML2_SOURCE_DIR}/cmake/Modules/DetectTorchCXXABI.cxx
+            DESTINATION share/cmake/neml2/Modules
+            COMPONENT libneml2
+      )
 endif()
 
-# check if wasp is downloaded
-path_has_prefix(${wasp_ROOT} ${NEML2_CONTRIB_PREFIX} wasp_CONTRIB)
-
-# wasp will be packaged as part of the NEML2 installation if it was downloaded by us (or if it is being built as a wheel).
-if(wasp_CONTRIB OR NEML2_WHEEL)
-      install_glob(${wasp_core_LIBRARY} lib libneml2)
-      install_glob(${wasp_hit_LIBRARY} lib libneml2)
-      install(DIRECTORY ${wasp_core_INCLUDE_DIR}/waspcore ${wasp_hit_INCLUDE_DIR}/wasphit TYPE INCLUDE COMPONENT libneml2)
-endif()
-install(FILES ${NEML2_SOURCE_DIR}/cmake/Modules/Findwasp.cmake DESTINATION share/cmake/neml2/Modules COMPONENT libneml2)
-
 # ----------------------------------------------------------------------------
-# hit
+# nmhit (neml2-hit)
 # ----------------------------------------------------------------------------
-find_package(hit MODULE)
+find_package(nmhit CONFIG HINTS ${NEML2_CONTRIB_PREFIX}/nmhit)
 
-if(NOT hit_FOUND)
-      if(NOT hit_SOURCE_DIR)
-            download_from_git(hit https://github.com/idaholab/hit.git ${NEML2_CONTRIB_PREFIX} ${hit_VERSION})
-            set(hit_SOURCE_DIR ${NEML2_CONTRIB_PREFIX}/hit-src)
+if(NOT nmhit_FOUND)
+      # nmhit is a git submodule, so we can just check it out and build it if it's not found.
+      if(NOT EXISTS ${NEML2_SOURCE_DIR}/contrib/nmhit-src/CMakeLists.txt)
+            message(STATUS "nmhit not found, checking out submodule...")
+            execute_process(
+                   COMMAND git submodule update --init --recursive -- contrib/nmhit-src
+                   WORKING_DIRECTORY ${NEML2_SOURCE_DIR}
+                   RESULT_VARIABLE nmhit_submodule_result
+                   OUTPUT_VARIABLE nmhit_submodule_output
+                   ERROR_VARIABLE nmhit_submodule_error
+             )
+             if(NOT nmhit_submodule_result EQUAL 0)
+                   message(FATAL_ERROR
+                         "Failed to initialize the nmhit submodule (exit code: ${nmhit_submodule_result}).\n"
+                         "git output:\n${nmhit_submodule_output}\n"
+                         "git error:\n${nmhit_submodule_error}\n"
+                         "Please ensure git is available and the source tree is a git checkout, or run:\n"
+                         "  git submodule update --init --recursive -- contrib/nmhit-src"
+                   )
+             endif()
       endif()
-
-      file(COPY ${hit_SOURCE_DIR}/include DESTINATION ${NEML2_CONTRIB_PREFIX}/hit-build FILES_MATCHING PATTERN "*.h")
-      file(COPY ${hit_SOURCE_DIR}/src DESTINATION ${NEML2_CONTRIB_PREFIX}/hit-build FILES_MATCHING PATTERN "*.cpp" PATTERN "*.cc")
-      configure_file(contrib/install_hit.cmake ${NEML2_CONTRIB_PREFIX}/hit-build/CMakeLists.txt @ONLY)
-      set(hit_INSTALL_PREFIX ${NEML2_CONTRIB_PREFIX}/hit CACHE PATH "hit install prefix")
-      custom_install(hit contrib/install_hit.sh ${NEML2_CONTRIB_PREFIX}/hit-build ${NEML2_CONTRIB_PREFIX}/hit-build ${hit_INSTALL_PREFIX})
-      find_package(hit MODULE REQUIRED)
+      set(nmhit_INSTALL_PREFIX ${NEML2_CONTRIB_PREFIX}/nmhit CACHE PATH "nmhit install prefix")
+      custom_install(nmhit contrib/install_nmhit.sh ${NEML2_SOURCE_DIR}/contrib/nmhit-src ${NEML2_CONTRIB_PREFIX}/nmhit-build ${nmhit_INSTALL_PREFIX})
+      find_package(nmhit CONFIG REQUIRED PATHS ${nmhit_INSTALL_PREFIX} NO_DEFAULT_PATH)
 endif()
 
-# check if hit is downloaded
-path_has_prefix(${hit_ROOT} ${NEML2_CONTRIB_PREFIX} hit_CONTRIB)
+# extract library path and include dir from the imported target
+get_target_property(nmhit_LIBRARY nmhit::nmhit LOCATION)
+get_target_property(nmhit_INCLUDE_DIR nmhit::nmhit INTERFACE_INCLUDE_DIRECTORIES)
 
-# hit will be packaged as part of the NEML2 installation if it was downloaded by us (or if it is being built as a wheel).
-if(hit_CONTRIB OR NEML2_WHEEL)
-      install(FILES ${hit_LIBRARY} TYPE LIB COMPONENT libneml2)
-      install(DIRECTORY ${hit_INCLUDE_DIR}/hit TYPE INCLUDE COMPONENT libneml2)
+# check if nmhit is downloaded
+path_has_prefix(${nmhit_DIR} ${NEML2_CONTRIB_PREFIX} nmhit_CONTRIB)
+
+# nmhit will be packaged as part of the NEML2 installation if it was downloaded by us (or if it is being built as a wheel).
+if(nmhit_CONTRIB OR NEML2_WHEEL)
+      install_glob(${nmhit_LIBRARY} ${INSTALL_LIBDIR} libneml2)
+      if(NOT SKBUILD_STATE STREQUAL "editable")
+            install(DIRECTORY ${nmhit_INCLUDE_DIR}/nmhit TYPE INCLUDE COMPONENT libneml2)
+      endif()
 endif()
-install(FILES ${NEML2_SOURCE_DIR}/cmake/Modules/Findhit.cmake DESTINATION share/cmake/neml2/Modules COMPONENT libneml2)
-
-# ----------------------------------------------------------------------------
-# timpi
-# ----------------------------------------------------------------------------
-# map between CMake build type and timpi build type
-set(timpi_BUILD_TYPE "opt" CACHE STRING "Build type for TIMPI")
-
-if(NEML2_WORK_DISPATCHER)
-      find_package(timpi MODULE)
-
-      if(NOT timpi_FOUND)
-            download_from_git(timpi https://github.com/libMesh/TIMPI.git ${NEML2_CONTRIB_PREFIX} ${timpi_VERSION})
-            set(timpi_INSTALL_PREFIX ${NEML2_CONTRIB_PREFIX}/timpi CACHE PATH "timpi install prefix")
-            custom_install(timpi contrib/install_timpi.sh ${NEML2_CONTRIB_PREFIX}/timpi-src ${NEML2_CONTRIB_PREFIX}/timpi-build/${timpi_BUILD_TYPE} ${timpi_INSTALL_PREFIX})
-            find_package(timpi MODULE REQUIRED)
-      endif()
-
-      # check if timpi is downloaded
-      path_has_prefix(${timpi_ROOT} ${NEML2_CONTRIB_PREFIX} timpi_CONTRIB)
-
-      # timpi will be packaged as part of the NEML2 installation if it was downloaded by us (or if it is being built as a wheel).
-      if(timpi_CONTRIB OR NEML2_WHEEL)
-            install_glob(${timpi_LIBRARY} lib libneml2)
-            install(DIRECTORY ${timpi_INCLUDE_DIR}/timpi TYPE INCLUDE COMPONENT libneml2)
-      endif()
-      install(FILES ${NEML2_SOURCE_DIR}/cmake/Modules/Findtimpi.cmake DESTINATION share/cmake/neml2/Modules COMPONENT libneml2)
+if(NOT SKBUILD_STATE STREQUAL "editable")
+      install(DIRECTORY ${nmhit_DIR} DESTINATION share/cmake COMPONENT libneml2)
 endif()
 
 # ----------------------------------------------------------------------------
 # nlohmann json
 # ----------------------------------------------------------------------------
 if(NEML2_JSON)
-      find_package(nlohmann_json CONFIG HINTS ${NEML2_CONTRIB_PREFIX}/json)
+      find_package(nlohmann_json CONFIG HINTS ${NEML2_CONTRIB_PREFIX}/nlohmann_json)
 
       if(NOT nlohmann_json_FOUND)
             download_from_git(nlohmann_json https://github.com/nlohmann/json.git ${NEML2_CONTRIB_PREFIX} ${nlohmann_json_VERSION})
@@ -270,9 +224,13 @@ if(NEML2_JSON)
 
       # nlohmann json will be packaged as part of the NEML2 installation if it was downloaded by us (or if it is being built as a wheel).
       if(nlohmann_json_CONTRIB OR NEML2_WHEEL)
-            install(DIRECTORY ${nlohmann_json_DIR}/include/nlohmann TYPE INCLUDE COMPONENT libneml2)
+            if(NOT SKBUILD_STATE STREQUAL "editable")
+                  install(DIRECTORY ${nlohmann_json_DIR}/include/nlohmann TYPE INCLUDE COMPONENT libneml2)
+            endif()
       endif()
-      install(DIRECTORY ${nlohmann_json_DIR}/share/ DESTINATION share COMPONENT libneml2)
+      if(NOT SKBUILD_STATE STREQUAL "editable")
+            install(DIRECTORY ${nlohmann_json_DIR}/share/ DESTINATION share COMPONENT libneml2)
+      endif()
 endif()
 
 # ----------------------------------------------------------------------------
@@ -293,15 +251,19 @@ if(NEML2_CSV)
 
       # csv-parser will be packaged as part of the NEML2 installation if it was downloaded by us (or if it is being built as a wheel).
       if(csvparser_CONTRIB OR NEML2_WHEEL)
-            install(DIRECTORY ${csvparser_ROOT}/csvparser/csvparser TYPE INCLUDE COMPONENT libneml2)
+            if(NOT SKBUILD_STATE STREQUAL "editable")
+                  install(DIRECTORY ${csvparser_ROOT}/csvparser/csvparser TYPE INCLUDE COMPONENT libneml2)
+            endif()
       endif()
-      install(FILES ${NEML2_SOURCE_DIR}/cmake/Modules/Findcsvparser.cmake DESTINATION share/cmake/neml2/Modules COMPONENT libneml2)
+      if(NOT SKBUILD_STATE STREQUAL "editable")
+            install(FILES ${NEML2_SOURCE_DIR}/cmake/Modules/Findcsvparser.cmake DESTINATION share/cmake/neml2/Modules COMPONENT libneml2)
+      endif()
 endif()
 
 # ----------------------------------------------------------------------------
 # CPU Profiler
 # ----------------------------------------------------------------------------
-if(NEML2_TESTS OR NEML2_RUNNER)
+if(NEML2_TOOLS)
       if(CMAKE_BUILD_TYPE STREQUAL "Profiling")
             find_package(gperftools MODULE COMPONENTS profiler)
 
@@ -317,15 +279,6 @@ if(NEML2_TESTS OR NEML2_RUNNER)
                   custom_install(gperftools contrib/install_gperftools.sh ${NEML2_CONTRIB_PREFIX}/gperftools-src ${NEML2_CONTRIB_PREFIX}/gperftools-build ${gperftools_INSTALL_PREFIX})
                   find_package(gperftools MODULE REQUIRED COMPONENTS profiler)
             endif()
-
-            # check if gperftools is downloaded
-            path_has_prefix(${gperftools_ROOT} ${NEML2_CONTRIB_PREFIX} gperftools_CONTRIB)
-
-            # gperftools will be packaged as part of the NEML2 installation if it was downloaded by us (or if it is being built as a wheel).
-            if(gperftools_CONTRIB OR NEML2_WHEEL)
-                  install_glob(${gperftools_profiler_LIBRARY} lib libneml2)
-            endif()
-            install(FILES ${NEML2_SOURCE_DIR}/cmake/Modules/Findgperftools.cmake DESTINATION share/cmake/neml2/Modules COMPONENT libneml2)
       endif()
 endif()
 
@@ -345,37 +298,16 @@ if(NEML2_TESTS)
 endif()
 
 # ----------------------------------------------------------------------------
-# Doxygen (and stylesheet)
+# MPI
 # ----------------------------------------------------------------------------
-if(NEML2_DOC AND NOT NEML2_PYBIND)
-      message(WARNING "Documentation requires Python bindings(NEML2_PYBIND=ON) , reverting NEML2_DOC to OFF")
-      set(NEML2_DOC OFF CACHE BOOL "Build NEML2 documentation(html)" FORCE)
-endif()
-
-if(NEML2_DOC)
-      find_package(Doxygen MODULE COMPONENTS dot)
-
-      if(NOT Doxygen_FOUND)
-            if(UNIX AND NOT APPLE)
-                  string(REPLACE "." "_" Doxygen_RELEASE ${Doxygen_VERSION})
-                  set(Doxygen_URL https://github.com/doxygen/doxygen/releases/download/Release_${Doxygen_RELEASE}/doxygen-${Doxygen_VERSION}.linux.bin.tar.gz)
-                  download_from_url(Doxygen ${Doxygen_URL} ${NEML2_CONTRIB_PREFIX})
-                  set(Doxygen_ROOT ${NEML2_CONTRIB_PREFIX}/Doxygen-src CACHE PATH "Doxygen install prefix")
-                  find_package(Doxygen MODULE REQUIRED COMPONENTS dot)
-            else()
-                  message(WARNING "Doxygen not found. Please install Doxygen manually or set NEML2_DOC to OFF.")
-                  set(NEML2_DOC OFF CACHE BOOL "Build NEML2 documentation(html)" FORCE)
-            endif()
-      endif()
-
-      download_from_git(doxygen-awesome-css https://github.com/jothepro/doxygen-awesome-css.git ${NEML2_CONTRIB_PREFIX} ${doxygen_awesome_css_VERSION})
-      set(doxygen-awesome-css_SOURCE_DIR ${NEML2_CONTRIB_PREFIX}/doxygen-awesome-css-src)
+if(NEML2_WORK_DISPATCHER)
+      find_package(MPI COMPONENTS CXX REQUIRED)
 endif()
 
 # ----------------------------------------------------------------------------
 # argparse
 # ----------------------------------------------------------------------------
-if(NEML2_RUNNER)
+if(NEML2_TOOLS)
       find_package(argparse CONFIG HINTS ${NEML2_CONTRIB_PREFIX}/argparse)
 
       if(NOT argparse_FOUND)
@@ -399,24 +331,17 @@ if(NEML2_TESTS)
 endif()
 
 # ----------------------------------------------------------------------------
-# runner
+# tools
 # ----------------------------------------------------------------------------
-if(NEML2_RUNNER)
-      add_subdirectory(runner)
+if(NEML2_TOOLS)
+      add_subdirectory(src/tools)
 endif()
 
 # ----------------------------------------------------------------------------
 # Python bindings
 # ----------------------------------------------------------------------------
-if(NEML2_PYBIND)
+if(NEML2_WHEEL)
       add_subdirectory(python)
-endif()
-
-# ----------------------------------------------------------------------------
-# Documentation
-# ----------------------------------------------------------------------------
-if(NEML2_DOC)
-      add_subdirectory(doc)
 endif()
 
 # ----------------------------------------------------------------------------

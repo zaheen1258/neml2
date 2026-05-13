@@ -25,7 +25,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "neml2/base/Settings.h"
-#include "neml2/models/LinearCombination.h"
+#include "neml2/models/common/LinearCombination.h"
 
 using namespace neml2;
 using ScalarLinearCombination = LinearCombination<Scalar>;
@@ -35,9 +35,8 @@ TEST_CASE("Factory", "[base]")
   auto options = ScalarLinearCombination::expected_options();
   options.name() = "example";
   options.type() = "ScalarLinearCombination";
-  options.set<std::vector<VariableName>>("from_var") = {VariableName(STATE, "A"),
-                                                        VariableName(STATE, "substate", "B")};
-  options.set<VariableName>("to_var") = VariableName(STATE, "outsub", "C");
+  options.set<std::vector<VariableName>>("from", {"A", "B"});
+  options.set<VariableName>("to", "C");
 
   InputFile inp(Settings::expected_options());
   inp["Models"]["example"] = options;

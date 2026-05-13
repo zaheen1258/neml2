@@ -24,6 +24,21 @@
 
 import torch
 import typing
+from pathlib import Path
+
+# Determine version
+version_file = Path(__file__).parent / "version"
+if version_file.exists():
+    __version__ = version_file.read_text().strip()
+else:
+    __version__ = "unknown"
+
+# Determine hash
+hash_file = Path(__file__).parent / "hash"
+if hash_file.exists():
+    __hash__ = hash_file.read_text().strip()
+else:
+    __hash__ = "unknown"
 
 Number = typing.Union[int, float, bool]
 
@@ -31,6 +46,7 @@ Number = typing.Union[int, float, bool]
 from .core import *
 from .tensors import *
 from .math import *
+from .es import *
 
 # pybind11-stubgen generates incorrect type annotations for Unions
 # so unfortunately we need to maintain this list
@@ -59,4 +75,4 @@ TensorLike = typing.Union[
 # Other submodules
 from . import pyzag
 from . import crystallography
-from . import reserved
+from . import reader
